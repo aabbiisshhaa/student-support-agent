@@ -39,3 +39,16 @@ To maintain software engineering integrity, AI autonomy is strictly bounded:
     ├── traces/               # Agent execution traces
     └── screenshots/          # System and ClickUp evidence
 ```
+
+## 👥 Team & Roles
+
+- **Project / Requirements Lead:** Baingana Abisha
+  - _Responsibilities:_ Scope definition, Project Charter, user stories, acceptance criteria, and overall project alignment.
+- **Application / Integration Lead:** Bantrobusa Kazibwe FZ
+  - _Responsibilities:_ Core application orchestration, API routes, user interface integration, and deterministic business logic.
+- **AI Engineering Lead:** Mbasani Pauline Peace
+  - _Responsibilities:_ Prompt engineering and versioning, RAG pipeline construction, vector indexing, and tool contracts.
+- **Quality / Security Lead:** Tendo Jemimah Nakayiwa
+  - _Responsibilities:_ AI Boundary Matrix compliance, 30-scenario evaluation suite, failure cataloging, guardrails, and corpus provenance.
+- **DevOps / Documentation Lead:** Tusiime Mable
+  - _Responsibilities:_ GitHub workflow automation, repository structure, ClickUp workspace tracking, architecture diagrams, and weekly reports.
