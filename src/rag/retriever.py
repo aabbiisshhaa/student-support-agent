@@ -1,0 +1,1950 @@
+"""
+src/rag/retriever.py - Vector Store Setup and Retrieval Pipeline.
+
+BSE4104 Agentic AI Capstone - University Student-Support Case Agent.
+Week 3, Task 2: "Vector Store Setup & Retrieval Pipeline".
+
+What this file does
+-------------------
+It initialises the local vector index over the chunks produced by
+`src/rag/ingest.py` and implements top-k semantic retrieval with similarity
+thresholds, so that answers to student policy questions are grounded in
+approved sources - or honestly refused.
+
+    data/chunks.jsonl                     (output of Task 1)
+          |
+          v
+    fit TF-IDF + Truncated SVD         -> data/vector_store/embedder.joblib
+          |
+          v
+    embed every chunk, index in ChromaDB -> data/vector_store/chroma/
+          |                                data/vector_store/index_report.json
+          v
+    question -> embed -> cosine nearest neighbours (candidate pool)
+          |
+          v
+    re-rank: hybrid score = 0.6 * dense + 0.4 * lexical
+          |
+          v
+    apply thresholds
+          |
+          +--> nothing clears the floor  -> status "ungrounded", no passages
+          +--> clears it but weakly      -> status "weak", passages flagged
+          +--> clears the strong bar     -> status "grounded", top-k passages
+
+This file is completely self-contained. The embedder, the vector store wrapper,
+the grounding signal and the retriever all live here, and so does the chunked
+corpus itself (section 1b), so the file runs on its own in an empty directory
+with no other project file present. When data/chunks.jsonl is there - because
+ingest.py has been run - that file is used instead of the built-in copy, so a
+change to the corpus flows straight through to the index.
+
+Usage
+-----
+    # just ask - the index is built automatically on first use
+    python src/rag/retriever.py "When is the add drop deadline?"
+
+    # or build the index explicitly (e.g. after re-running ingest.py)
+    python src/rag/retriever.py --build
+    python src/rag/retriever.py "How do I appeal a grade?" --top-k 3
+    python src/rag/retriever.py "What are the library fines?" --doc library_services_2026
+    python src/rag/retriever.py "Can I get a parking permit?" --json
+
+Or as a library:
+
+    from retriever import Retriever
+    result = Retriever().retrieve("When is the add drop deadline?")
+    if result.is_grounded:
+        for passage in result.passages:
+            print(passage.citation, passage.text)
+
+Requirements: scikit-learn and numpy (which bring in scipy and joblib).
+chromadb is used when it is installed; when it is not, the same interface is
+served from a built-in NumPy embeddings cache that returns identical rankings
+and identical cosine distances, so the file still runs. Set
+RAG_VECTOR_BACKEND=chroma or =numpy to pin one explicitly.
+
+Owner: Pauline Peace (PP).
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import gzip
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Literal
+
+import numpy as np
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS, TfidfVectorizer
+from sklearn.preprocessing import normalize
+
+# ==========================================================================
+# 1. Project paths
+# ==========================================================================
+
+
+def find_project_root(start: Path | None = None) -> Path:
+    """Locate the project root.
+
+    Resolution order:
+      1. the RAG_PROJECT_ROOT environment variable, if set;
+      2. the nearest ancestor directory holding data/chunks.jsonl, the Week 1
+         register at docs/corpus_source_register.json, or knowledge/raw/;
+      3. two levels above this file (i.e. the parent of src/).
+    """
+    env_root = os.environ.get("RAG_PROJECT_ROOT")
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+
+    here = (start or Path(__file__)).resolve()
+    for candidate in here.parents:
+        if (candidate / "data" / "chunks.jsonl").exists():
+            return candidate
+        if (candidate / "docs" / "corpus_source_register.json").exists():
+            return candidate
+        if (candidate / "knowledge" / "raw").is_dir():
+            return candidate
+
+    # Nothing recognisable nearby. If this file sits at src/rag/<name>.py the
+    # project root is two levels up; otherwise the file is running on its own
+    # and its own directory is the right place to work in.
+    if here.parent.name == "rag" and here.parent.parent.name == "src":
+        return here.parents[2]
+    return here.parent
+
+
+def _writable_root(root: Path) -> Path:
+    """Fall back to a temporary directory if the detected root is read-only.
+
+    The index and the fitted embedder have to be written somewhere. If this
+    file is run from a place it cannot write to, they go under the system
+    temporary directory instead of the run failing.
+    """
+    try:
+        if os.access(root, os.W_OK):
+            return root
+    except OSError:
+        pass
+    fallback = Path(tempfile.gettempdir()) / "bse4104_rag"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+PROJECT_ROOT = _writable_root(find_project_root())
+
+DATA_DIR = PROJECT_ROOT / "data"
+CHUNKS_PATH = DATA_DIR / "chunks.jsonl"
+CHUNK_MANIFEST_PATH = DATA_DIR / "chunk_manifest.json"
+
+VECTOR_STORE_DIR = DATA_DIR / "vector_store"
+CHROMA_DIR = VECTOR_STORE_DIR / "chroma"
+EMBEDDER_PATH = VECTOR_STORE_DIR / "embedder.joblib"
+INDEX_REPORT_PATH = VECTOR_STORE_DIR / "index_report.json"
+
+COLLECTION_NAME = "university_policy_corpus"
+
+# ==========================================================================
+# 1b. Built-in copy of the chunked corpus
+# ==========================================================================
+#
+# This file is submitted on its own, so it carries its own input: the 101
+# chunks produced by src/rag/ingest.py, gzipped and base64-encoded below.
+#
+# Disk always wins. If data/chunks.jsonl exists - because ingest.py has been
+# run in this project - that file is used, so a change to the corpus flows
+# straight through to the index. The built-in copy is only used when the file
+# is not there, which is what makes `python retriever.py "question"` work from
+# an empty directory.
+#
+# The payload is checked against a SHA-256 digest before use, so a corrupted
+# copy of this file fails loudly instead of quietly indexing damaged text.
+
+EMBEDDED_CHUNKS_SHA256 = "5c66b389e72cd850f9b028d0f1de80d08a2a6b94ae055677bb15049655700909"
+
+EMBEDDED_CHUNKS_JSONL_GZ_B64 = """
+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
+"""
+
+# Where the chunks actually came from, reported by the CLI and recorded in the
+# index report.
+CHUNKS_SOURCE = "unresolved"
+
+
+def embedded_chunks_bytes() -> bytes:
+    """Decode and verify the built-in chunk file."""
+    packed = base64.b64decode("".join(EMBEDDED_CHUNKS_JSONL_GZ_B64.split()))
+    data = gzip.decompress(packed)
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != EMBEDDED_CHUNKS_SHA256:
+        raise RuntimeError(
+            "The built-in chunk archive failed its integrity check "
+            f"(expected {EMBEDDED_CHUNKS_SHA256}, got {digest}). "
+            "This copy of retriever.py has been altered or truncated."
+        )
+    return data
+
+
+# ==========================================================================
+# 2. Embedding parameters
+# ==========================================================================
+
+# Requested dimensionality of the dense vector produced by TF-IDF + Truncated
+# SVD (LSA). SVD cannot return more components than min(n_chunks, n_features)
+# - 1, so with a deliberately small corpus the embedder clamps this and
+# reports the effective dimensionality in the index report.
+EMBEDDING_DIM = 128
+
+# Fixed seed so that rebuilding the index produces identical vectors.
+EMBEDDING_RANDOM_STATE = 42
+
+# n-gram range for the TF-IDF stage. Bigrams matter because university policy
+# language is full of two-word terms ("add/drop", "grade point",
+# "supplementary examination").
+TFIDF_NGRAM_RANGE = (1, 2)
+
+EMBEDDING_MODEL_NAME = "tfidf-svd-lsa-v1"
+
+# ==========================================================================
+# 3. Retrieval parameters
+# ==========================================================================
+
+# Number of chunks fetched from the vector store before re-ranking.
+CANDIDATE_POOL = 12
+
+# Number of chunks finally handed to the model as evidence.
+TOP_K = 4
+
+# Hybrid score weights. The dense (semantic) component handles paraphrase; the
+# sparse (lexical) component protects exact policy terms from being smoothed
+# away by dimensionality reduction.
+DENSE_WEIGHT = 0.6
+SPARSE_WEIGHT = 0.4
+
+# Relevance floor. Below this, nothing in the corpus is even topically related
+# and no passages are returned at all.
+#
+# Calibrated against 23 answerable and 10 unanswerable questions. The measured
+# hybrid-score ranges were:
+#     answerable   0.248 - 0.669
+#     unanswerable 0.281 - 0.569
+# Those ranges overlap, so similarity alone cannot decide whether to answer.
+# The floor is therefore set just below the weakest genuinely answerable
+# question rather than high enough to exclude the unanswerable ones, and the
+# coverage signal below carries the rest of the judgement.
+SIMILARITY_THRESHOLD = 0.24
+
+# Above this score AND above COVERAGE_THRESHOLD, a retrieval is reported as
+# "grounded". Anything in between is "weak": the passages are still returned,
+# but flagged so the agent verifies them and hedges rather than asserting.
+STRONG_EVIDENCE_THRESHOLD = 0.40
+
+# Minimum share of the question's content words that must appear in the
+# retrieved evidence for the result to count as grounded. See section 6 for
+# why this second signal exists and why it is a reported confidence label
+# rather than a hard gate.
+COVERAGE_THRESHOLD = 0.70
+
+# ==========================================================================
+# 4. Embeddings
+# ==========================================================================
+#
+# The embedding model is TF-IDF followed by Truncated SVD (Latent Semantic
+# Analysis), producing a dense, L2-normalised vector per chunk, fitted on the
+# project's own corpus. It was chosen over a pre-trained transformer encoder
+# for reasons that are properties of this project:
+#
+# * It runs offline and installs from the standard scientific Python stack, so
+#   the agent is reproducible by every group member and by the marker without
+#   a model download or an embedding API key.
+# * It is deterministic. With a fixed seed the same corpus produces identical
+#   vectors, so a retrieval result recorded in the evaluation suite can be
+#   reproduced exactly later.
+# * The corpus is a single narrow domain with a small, repetitive vocabulary.
+#   LSA over 12 policy documents captures that domain's term co-occurrence
+#   structure well: "withdraw", "withdrawal" and "drop" occur with the same
+#   surrounding vocabulary and end up close in the reduced space.
+# * There is no token cost and no data leaves the machine, which matters
+#   because the wider agent handles student case data.
+#
+# Its known weakness is that it cannot recognise a paraphrase that shares no
+# vocabulary with the source document and never co-occurs with it in the
+# corpus. The hybrid retriever below mitigates it, and this interface is
+# narrow enough that the model can be swapped for a transformer encoder later
+# without touching the vector store or the retriever.
+#
+# Two deliberate configuration choices:
+#
+# * No stop-word removal. Standard English stop lists delete "may", "must",
+#   "not" and "only". In policy text those words carry the rule: "a student
+#   may not drop a core course" and "a student may drop a core course" would
+#   otherwise become identical.
+# * Unigrams and bigrams, because two-word policy terms do not mean the sum of
+#   their parts.
+
+
+@dataclass
+class EmbedderInfo:
+    """Facts about a fitted embedder, recorded in the index report."""
+
+    model_name: str
+    requested_dim: int
+    effective_dim: int
+    vocabulary_size: int
+    documents_fitted: int
+    explained_variance: float
+    random_state: int
+
+    def to_dict(self) -> dict:
+        return {
+            "model_name": self.model_name,
+            "requested_dim": self.requested_dim,
+            "effective_dim": self.effective_dim,
+            "vocabulary_size": self.vocabulary_size,
+            "documents_fitted": self.documents_fitted,
+            "explained_variance": round(self.explained_variance, 4),
+            "random_state": self.random_state,
+        }
+
+
+class CorpusEmbedder:
+    """TF-IDF + SVD embedder fitted on the knowledge corpus."""
+
+    def __init__(
+        self,
+        dim: int = EMBEDDING_DIM,
+        ngram_range: tuple[int, int] = TFIDF_NGRAM_RANGE,
+        random_state: int = EMBEDDING_RANDOM_STATE,
+    ) -> None:
+        self.requested_dim = dim
+        self.random_state = random_state
+        self.vectorizer = TfidfVectorizer(
+            lowercase=True,
+            ngram_range=ngram_range,
+            sublinear_tf=True,      # dampens repeated boilerplate terms
+            min_df=1,               # the corpus is small; rare terms are signal
+            stop_words=None,        # see section note: modal verbs matter
+            token_pattern=r"(?u)\b\w[\w/\-]+\b",  # keeps "add/drop", "re-sit"
+        )
+        self.svd: TruncatedSVD | None = None
+        self.info: EmbedderInfo | None = None
+
+    # -- fitting ---------------------------------------------------------
+
+    def fit(self, texts: list[str]) -> "CorpusEmbedder":
+        """Fit the vectorizer and the SVD projection on the corpus chunks."""
+        if not texts:
+            raise ValueError("Cannot fit the embedder on an empty corpus.")
+
+        tfidf = self.vectorizer.fit_transform(texts)
+        n_samples, n_features = tfidf.shape
+
+        # Truncated SVD cannot produce more components than the smaller
+        # dimension of the matrix. With a small corpus this bound binds, so
+        # the effective dimensionality is clamped and reported rather than
+        # silently failing.
+        effective_dim = min(self.requested_dim, n_samples - 1, n_features - 1)
+        if effective_dim < 2:
+            raise ValueError(
+                f"Corpus too small to embed: {n_samples} chunks, {n_features} features."
+            )
+
+        self.svd = TruncatedSVD(
+            n_components=effective_dim,
+            random_state=self.random_state,
+            algorithm="randomized",
+            n_iter=10,
+        )
+        self.svd.fit(tfidf)
+
+        self.info = EmbedderInfo(
+            model_name=EMBEDDING_MODEL_NAME,
+            requested_dim=self.requested_dim,
+            effective_dim=effective_dim,
+            vocabulary_size=n_features,
+            documents_fitted=n_samples,
+            explained_variance=float(self.svd.explained_variance_ratio_.sum()),
+            random_state=self.random_state,
+        )
+        return self
+
+    # -- transforming ----------------------------------------------------
+
+    def _dense(self, texts: list[str]) -> np.ndarray:
+        if self.svd is None:
+            raise RuntimeError("Embedder is not fitted. Call fit() or load().")
+        tfidf = self.vectorizer.transform(texts)
+        dense = self.svd.transform(tfidf)
+        # L2 normalisation makes the dot product equal cosine similarity,
+        # which is what the vector store is configured to use.
+        return normalize(dense).astype(np.float32)
+
+    def embed_documents(self, texts: list[str]) -> np.ndarray:
+        """Embed corpus chunks. Shape: (n_texts, effective_dim)."""
+        return self._dense(texts)
+
+    def embed_query(self, text: str) -> np.ndarray:
+        """Embed a single student question. Shape: (effective_dim,)."""
+        return self._dense([text])[0]
+
+    def lexical_similarity(self, query: str, texts: list[str]) -> np.ndarray:
+        """Cosine similarity between the query and each text in TF-IDF space.
+
+        This is the component that protects exact policy vocabulary. SVD
+        compresses the corpus into a low-rank space and can blur a rare but
+        decisive term; the sparse space still has that term as its own
+        dimension.
+        """
+        if not texts:
+            return np.zeros(0, dtype=np.float32)
+        query_vector = normalize(self.vectorizer.transform([query]))
+        text_vectors = normalize(self.vectorizer.transform(texts))
+        similarities = (text_vectors @ query_vector.T).toarray()
+        return np.asarray(similarities).ravel().astype(np.float32)
+
+    # -- persistence -----------------------------------------------------
+
+    def save(self, path: Path | None = None) -> Path:
+        """Persist the fitted embedder next to the vector index."""
+        import joblib
+
+        path = path or EMBEDDER_PATH
+        if self.svd is None or self.info is None:
+            raise RuntimeError("Refusing to save an unfitted embedder.")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(
+            {
+                "vectorizer": self.vectorizer,
+                "svd": self.svd,
+                "info": self.info,
+                "requested_dim": self.requested_dim,
+                "random_state": self.random_state,
+            },
+            path,
+        )
+        return path
+
+    @classmethod
+    def load(cls, path: Path | None = None) -> "CorpusEmbedder":
+        """Load a previously fitted embedder."""
+        import joblib
+
+        path = path or EMBEDDER_PATH
+        if not path.exists():
+            raise FileNotFoundError(
+                f"No fitted embedder at {path}. "
+                "Run `python src/rag/retriever.py --build` first."
+            )
+        payload = joblib.load(path)
+        embedder = cls(
+            dim=payload["requested_dim"], random_state=payload["random_state"]
+        )
+        embedder.vectorizer = payload["vectorizer"]
+        embedder.svd = payload["svd"]
+        embedder.info = payload["info"]
+        return embedder
+
+
+# ==========================================================================
+# 5. Vector store
+# ==========================================================================
+#
+# ChromaDB was chosen from the options named in the task (ChromaDB, FAISS, or
+# an embeddings cache) because it is the only one of the three that stores the
+# chunk text and its metadata alongside the vector. Source grounding is the
+# point of this pipeline: a retrieval result has to come back carrying its
+# document, section and page, not just a row index that the application then
+# has to look up in a side table it could get out of sync with. FAISS would
+# require exactly that side table.
+#
+# The collection is configured for cosine distance, which matches the
+# L2-normalised vectors the embedder produces. Vectors are computed by
+# CorpusEmbedder and passed in explicitly rather than letting Chroma call its
+# own default embedding function, so the embedding model stays under the
+# project's control and the store never silently downloads one.
+
+# Metadata fields carried into the store. Chroma metadata values must be
+# scalars, so list-valued fields are flattened on the way in.
+METADATA_FIELDS = (
+    "doc_id",
+    "doc_title",
+    "publisher",
+    "version",
+    "effective_date",
+    "category",
+    "source_file",
+    "source_format",
+    "section_number",
+    "section_title",
+    "page_start",
+    "page_end",
+    "chunk_index",
+    "token_count",
+    "content_hash",
+    "citation",
+    "overlap_with_previous",
+)
+
+
+@dataclass
+class StoredChunk:
+    """A chunk as it comes back out of the vector store."""
+
+    chunk_id: str
+    text: str
+    metadata: dict[str, Any]
+    distance: float | None = None
+
+
+def _to_metadata(chunk: dict) -> dict[str, Any]:
+    """Flatten a chunk record's metadata into Chroma-compatible scalars."""
+    metadata: dict[str, Any] = {}
+    for name in METADATA_FIELDS:
+        value = chunk.get(name)
+        # Chroma rejects None; an empty string keeps the key present so
+        # downstream code can rely on the schema being stable.
+        metadata[name] = "" if value is None else value
+    metadata["tags"] = "|".join(chunk.get("tags") or [])
+    return metadata
+
+
+class VectorStore:
+    """Thin, explicit wrapper over a persistent Chroma collection."""
+
+    backend = "chromadb (PersistentClient)"
+
+    def __init__(
+        self,
+        persist_dir: Path | None = None,
+        collection_name: str = COLLECTION_NAME,
+    ) -> None:
+        try:
+            import chromadb
+            from chromadb.config import Settings
+        except ImportError as exc:  # handled by create_store()
+            raise ImportError(
+                "chromadb is not installed. Install it with `pip install chromadb`, "
+                "or set RAG_VECTOR_BACKEND=numpy to use the built-in embeddings "
+                "cache instead."
+            ) from exc
+
+        self.persist_dir = persist_dir or CHROMA_DIR
+        self.collection_name = collection_name
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+        self.client = chromadb.PersistentClient(
+            path=str(self.persist_dir),
+            settings=Settings(anonymized_telemetry=False, allow_reset=True),
+        )
+        self.collection = self.client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    # -- writing ---------------------------------------------------------
+
+    def reset(self) -> None:
+        """Drop and recreate the collection so a rebuild is never additive.
+
+        An additive rebuild would leave chunks from a previous corpus version
+        in the store, and the agent would then cite a policy the register no
+        longer approves.
+        """
+        try:
+            self.client.delete_collection(self.collection_name)
+        except Exception:
+            pass
+        self.collection = self.client.get_or_create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    def add_chunks(
+        self,
+        chunks: list[dict],
+        embeddings: np.ndarray,
+        batch_size: int = 100,
+    ) -> int:
+        """Index chunk records with their pre-computed embeddings."""
+        if len(chunks) != embeddings.shape[0]:
+            raise ValueError(
+                f"{len(chunks)} chunks but {embeddings.shape[0]} embeddings."
+            )
+
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            self.collection.add(
+                ids=[c["chunk_id"] for c in batch],
+                documents=[c["text"] for c in batch],
+                embeddings=embeddings[start : start + batch_size].tolist(),
+                metadatas=[_to_metadata(c) for c in batch],
+            )
+        return self.collection.count()
+
+    # -- reading ---------------------------------------------------------
+
+    def count(self) -> int:
+        return self.collection.count()
+
+    def query(
+        self,
+        embedding: np.ndarray,
+        n_results: int = CANDIDATE_POOL,
+        where: dict | None = None,
+    ) -> list[StoredChunk]:
+        """Nearest-neighbour search, optionally filtered by metadata.
+
+        `where` supports filters such as {"doc_id": "fees_policy_2026"} or
+        {"category": "assessment"}, which is what lets the agent scope a
+        search to, say, examination rules only.
+        """
+        n_results = min(n_results, max(self.count(), 1))
+        response = self.collection.query(
+            query_embeddings=[embedding.tolist()],
+            n_results=n_results,
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        )
+
+        results: list[StoredChunk] = []
+        for chunk_id, text, metadata, distance in zip(
+            response["ids"][0],
+            response["documents"][0],
+            response["metadatas"][0],
+            response["distances"][0],
+        ):
+            results.append(
+                StoredChunk(
+                    chunk_id=chunk_id,
+                    text=text,
+                    metadata=dict(metadata),
+                    distance=float(distance),
+                )
+            )
+        return results
+
+    def get_by_id(self, chunk_id: str) -> StoredChunk | None:
+        response = self.collection.get(
+            ids=[chunk_id], include=["documents", "metadatas"]
+        )
+        if not response["ids"]:
+            return None
+        return StoredChunk(
+            chunk_id=response["ids"][0],
+            text=response["documents"][0],
+            metadata=dict(response["metadatas"][0]),
+        )
+
+    def stats(self) -> dict[str, Any]:
+        """Summary of what is indexed, used by the build report and tests."""
+        response = self.collection.get(include=["metadatas"])
+        metadatas = response["metadatas"]
+        by_document: dict[str, int] = {}
+        by_category: dict[str, int] = {}
+        for metadata in metadatas:
+            by_document[metadata["doc_id"]] = by_document.get(metadata["doc_id"], 0) + 1
+            by_category[metadata["category"]] = (
+                by_category.get(metadata["category"], 0) + 1
+            )
+        return {
+            "collection": self.collection_name,
+            "persist_dir": str(self.persist_dir),
+            "chunks": len(metadatas),
+            "documents": len(by_document),
+            "chunks_per_document": dict(sorted(by_document.items())),
+            "chunks_per_category": dict(sorted(by_category.items())),
+        }
+
+
+class NumpyVectorStore:
+    """Fallback vector store: a persistent embeddings cache over NumPy.
+
+    The task allows "ChromaDB, FAISS, or an embeddings cache". ChromaDB is the
+    default because it stores text and metadata alongside the vector, but it is
+    a sizeable install, and this file has to run wherever it is submitted. If
+    chromadb is not importable, the same interface is served from a single .npz
+    file holding the embedding matrix plus a JSON sidecar holding the chunk
+    text and metadata.
+
+    With 101 L2-normalised vectors an exhaustive dot product is exact and
+    instant, so this fallback returns the same ranking and the same cosine
+    distances as the Chroma collection - not an approximation of them.
+    """
+
+    backend = "numpy embeddings cache"
+
+    def __init__(
+        self,
+        persist_dir: Path | None = None,
+        collection_name: str = COLLECTION_NAME,
+    ) -> None:
+        self.persist_dir = persist_dir or CHROMA_DIR.parent / "numpy_index"
+        self.collection_name = collection_name
+        self.persist_dir.mkdir(parents=True, exist_ok=True)
+        self.vectors_path = self.persist_dir / f"{collection_name}.npz"
+        self.records_path = self.persist_dir / f"{collection_name}.json"
+        self._vectors: np.ndarray = np.zeros((0, 0), dtype=np.float32)
+        self._records: list[dict] = []
+        self._load()
+
+    # -- persistence -----------------------------------------------------
+
+    def _load(self) -> None:
+        if self.vectors_path.exists() and self.records_path.exists():
+            self._vectors = np.load(self.vectors_path)["embeddings"].astype(np.float32)
+            self._records = json.loads(self.records_path.read_text(encoding="utf-8"))
+
+    def _save(self) -> None:
+        np.savez_compressed(self.vectors_path, embeddings=self._vectors)
+        self.records_path.write_text(
+            json.dumps(self._records, ensure_ascii=False), encoding="utf-8"
+        )
+
+    # -- writing ---------------------------------------------------------
+
+    def reset(self) -> None:
+        """Drop the index so a rebuild is never additive."""
+        self._vectors = np.zeros((0, 0), dtype=np.float32)
+        self._records = []
+        for path in (self.vectors_path, self.records_path):
+            if path.exists():
+                path.unlink()
+
+    def add_chunks(
+        self,
+        chunks: list[dict],
+        embeddings: np.ndarray,
+        batch_size: int = 100,  # accepted for interface parity; unused here
+    ) -> int:
+        if len(chunks) != embeddings.shape[0]:
+            raise ValueError(
+                f"{len(chunks)} chunks but {embeddings.shape[0]} embeddings."
+            )
+        new_records = [
+            {
+                "chunk_id": c["chunk_id"],
+                "text": c["text"],
+                "metadata": _to_metadata(c),
+            }
+            for c in chunks
+        ]
+        if self._records:
+            self._vectors = np.vstack([self._vectors, embeddings.astype(np.float32)])
+            self._records.extend(new_records)
+        else:
+            self._vectors = embeddings.astype(np.float32)
+            self._records = new_records
+        self._save()
+        return len(self._records)
+
+    # -- reading ---------------------------------------------------------
+
+    def count(self) -> int:
+        return len(self._records)
+
+    @staticmethod
+    def _matches(metadata: dict[str, Any], where: dict | None) -> bool:
+        """Support the same equality and $and filters used with Chroma."""
+        if not where:
+            return True
+        if "$and" in where:
+            return all(
+                NumpyVectorStore._matches(metadata, clause) for clause in where["$and"]
+            )
+        return all(metadata.get(key) == value for key, value in where.items())
+
+    def query(
+        self,
+        embedding: np.ndarray,
+        n_results: int = CANDIDATE_POOL,
+        where: dict | None = None,
+    ) -> list[StoredChunk]:
+        if not self._records:
+            return []
+
+        indices = [
+            i
+            for i, record in enumerate(self._records)
+            if self._matches(record["metadata"], where)
+        ]
+        if not indices:
+            return []
+
+        query_vector = np.asarray(embedding, dtype=np.float32).ravel()
+        similarities = self._vectors[indices] @ query_vector
+        order = np.argsort(-similarities)[:n_results]
+
+        return [
+            StoredChunk(
+                chunk_id=self._records[indices[int(j)]]["chunk_id"],
+                text=self._records[indices[int(j)]]["text"],
+                metadata=dict(self._records[indices[int(j)]]["metadata"]),
+                # Cosine distance, exactly as Chroma reports it.
+                distance=float(1.0 - similarities[int(j)]),
+            )
+            for j in order
+        ]
+
+    def get_by_id(self, chunk_id: str) -> StoredChunk | None:
+        for record in self._records:
+            if record["chunk_id"] == chunk_id:
+                return StoredChunk(
+                    chunk_id=record["chunk_id"],
+                    text=record["text"],
+                    metadata=dict(record["metadata"]),
+                )
+        return None
+
+    def stats(self) -> dict[str, Any]:
+        by_document: dict[str, int] = {}
+        by_category: dict[str, int] = {}
+        for record in self._records:
+            metadata = record["metadata"]
+            by_document[metadata["doc_id"]] = by_document.get(metadata["doc_id"], 0) + 1
+            by_category[metadata["category"]] = (
+                by_category.get(metadata["category"], 0) + 1
+            )
+        return {
+            "collection": self.collection_name,
+            "persist_dir": str(self.persist_dir),
+            "chunks": len(self._records),
+            "documents": len(by_document),
+            "chunks_per_document": dict(sorted(by_document.items())),
+            "chunks_per_category": dict(sorted(by_category.items())),
+        }
+
+
+def create_store(**kwargs):
+    """Open the vector store: ChromaDB when it is installed, NumPy otherwise.
+
+    Set RAG_VECTOR_BACKEND=numpy to force the fallback (useful for checking
+    that both paths give the same answers).
+    """
+    preference = os.environ.get("RAG_VECTOR_BACKEND", "").strip().lower()
+    if preference == "numpy":
+        return NumpyVectorStore(**kwargs)
+    if preference in {"", "auto", "chroma", "chromadb"}:
+        try:
+            return VectorStore(**kwargs)
+        except ImportError:
+            if preference in {"chroma", "chromadb"}:
+                raise
+            return NumpyVectorStore(**kwargs)
+    raise ValueError(
+        f"Unknown RAG_VECTOR_BACKEND '{preference}' (use 'chroma' or 'numpy')."
+    )
+
+
+
+# ==========================================================================
+# 6. Grounding signal: does the evidence talk about what was asked?
+# ==========================================================================
+#
+# Cosine similarity alone cannot tell an answerable question from an
+# unanswerable one in a corpus this narrow. That is a measured result, not an
+# assumption: scoring 23 answerable and 10 unanswerable questions against the
+# index gave answerable 0.248-0.669 and unanswerable 0.281-0.569. The ranges
+# overlap almost completely. "How do I apply for a PhD in Computer Science
+# here?" scores 0.569 - higher than most genuinely answerable questions -
+# because the corpus is full of text about applying, computer science and
+# programmes. It contains nothing about doctoral admission.
+#
+# The reason is structural: every chunk is a university policy written in the
+# same register, so everything is somewhat similar to everything else.
+# Similarity measures topical closeness, not whether the answer is present.
+#
+# Coverage asks a different, more literal question: of the content words the
+# student actually used, how many appear anywhere in the passages we are about
+# to hand the model?
+#
+#     coverage = |query content terms found in evidence| / |query content terms|
+#
+# It is reported, not used as a hard gate. Grid-searching both thresholds
+# showed that a gate strict enough to refuse every unanswerable question also
+# refused more than half of the answerable ones - an agent that unhelpful is a
+# worse outcome than one that occasionally hands over evidence that turns out
+# not to answer the question. So retrieval keeps recall high and labels its own
+# confidence, and the final refusal is made by the model, which can read the
+# passages and see that a paragraph about an undergraduate programme does not
+# answer a question about doctoral admission.
+
+WORD_RE = re.compile(r"[\w/\-]+")
+
+# Suffixes stripped, longest first, so that "payments" -> "pay" rather than
+# "payment". Intentionally cruder than a real stemmer: it only has to be
+# consistent between the query and the evidence, not linguistically correct.
+SUFFIXES = ("ities", "ment", "ing", "ied", "ies", "ed", "ly", "s")
+
+# Words common in questions that say nothing about topic coverage. Removed
+# only for the coverage calculation - the index itself keeps every word,
+# because "may not" and "may" mean different things in a policy document.
+QUESTION_WORDS = {
+    "what", "when", "where", "who", "whom", "which", "how", "why",
+    "can", "could", "should", "would", "will", "shall", "may", "must",
+    "do", "does", "did", "is", "are", "was", "were", "am", "be", "been",
+    "get", "got", "need", "want", "like", "know", "tell", "say", "said",
+    "please", "thanks", "hi", "hello", "university", "student", "students",
+    "many", "much", "long", "happen", "happens",
+}
+
+MIN_TERM_LENGTH = 3
+
+
+def stem(term: str) -> str:
+    """Strip a common suffix, leaving a stable stem of at least 4 characters."""
+    for suffix in SUFFIXES:
+        if len(term) > len(suffix) + 3 and term.endswith(suffix):
+            return term[: -len(suffix)]
+    return term
+
+
+def content_terms(text: str) -> list[str]:
+    """Stemmed content words of a query, in first-seen order."""
+    terms: list[str] = []
+    for raw in WORD_RE.findall(text.lower()):
+        if len(raw) < MIN_TERM_LENGTH:
+            continue
+        if raw in ENGLISH_STOP_WORDS or raw in QUESTION_WORDS:
+            continue
+        stemmed = stem(raw)
+        if stemmed in QUESTION_WORDS:
+            continue
+        if stemmed not in terms:
+            terms.append(stemmed)
+    return terms
+
+
+@dataclass
+class Coverage:
+    """How much of the question the retrieved evidence actually addresses."""
+
+    score: float
+    matched: list[str]
+    missing: list[str]
+    total_terms: int
+
+    def to_dict(self) -> dict:
+        return {
+            "score": round(self.score, 3),
+            "matched_terms": self.matched,
+            "missing_terms": self.missing,
+            "total_terms": self.total_terms,
+        }
+
+
+def compute_coverage(query: str, passage_texts: list[str]) -> Coverage:
+    """Measure content-term coverage of `query` by the retrieved passages."""
+    terms = content_terms(query)
+    if not terms:
+        # A query with no content words ("what about that?") cannot be judged
+        # this way. Returning 1.0 means "this signal has no opinion" rather
+        # than falsely reporting perfect grounding; the similarity floor and
+        # the model's own check still apply.
+        return Coverage(score=1.0, matched=[], missing=[], total_terms=0)
+
+    blob = " ".join(passage_texts).lower()
+    evidence_terms: set[str] = set()
+    for word in WORD_RE.findall(blob):
+        evidence_terms.add(stem(word))
+        # A compound like "add/drop" or "re-sit" must also satisfy a query
+        # that uses only one half of it ("drop", "sit").
+        if "/" in word or "-" in word:
+            for part in re.split(r"[/\-]", word):
+                if part:
+                    evidence_terms.add(stem(part))
+
+    matched = [t for t in terms if t in evidence_terms]
+    missing = [t for t in terms if t not in evidence_terms]
+
+    return Coverage(
+        score=len(matched) / len(terms),
+        matched=matched,
+        missing=missing,
+        total_terms=len(terms),
+    )
+
+
+# ==========================================================================
+# 7. Retrieval
+# ==========================================================================
+#
+# Why two stages: the dense vector search is what makes "How late can I leave
+# a course?" find a section that only ever says "withdraw". But dimensionality
+# reduction blurs rare decisive terms, so a purely dense ranking will sometimes
+# put a topically-similar chunk above the one that actually contains the rule.
+# The lexical re-rank restores exact terms - "add/drop", "UGX", a specific date
+# - over a small candidate pool where it is cheap to compute.
+#
+# Why the threshold matters: a nearest-neighbour search always returns
+# something. Without a floor, a question about a policy the University has
+# never published would return the four least-irrelevant chunks in the corpus,
+# and the model would be handed plausible-looking evidence for an answer that
+# does not exist.
+
+GroundingStatus = Literal["grounded", "weak", "ungrounded"]
+
+
+@dataclass
+class RetrievedPassage:
+    """One passage of evidence, with everything needed to cite it."""
+
+    chunk_id: str
+    text: str
+    score: float
+    dense_score: float
+    lexical_score: float
+    rank: int
+    citation: str
+    doc_id: str
+    doc_title: str
+    section: str
+    page_start: int
+    page_end: int
+    version: str
+    publisher: str
+
+    @classmethod
+    def from_stored(
+        cls,
+        stored: StoredChunk,
+        score: float,
+        dense: float,
+        lexical: float,
+        rank: int,
+    ) -> "RetrievedPassage":
+        metadata = stored.metadata
+        section_number = metadata.get("section_number") or ""
+        section_title = metadata.get("section_title") or ""
+        section = (
+            f"{section_number}. {section_title}".strip(". ")
+            if section_title
+            else "(unsectioned)"
+        )
+        return cls(
+            chunk_id=stored.chunk_id,
+            text=stored.text,
+            score=round(float(score), 4),
+            dense_score=round(float(dense), 4),
+            lexical_score=round(float(lexical), 4),
+            rank=rank,
+            citation=metadata.get("citation", ""),
+            doc_id=metadata.get("doc_id", ""),
+            doc_title=metadata.get("doc_title", ""),
+            section=section,
+            page_start=int(metadata.get("page_start", 0)),
+            page_end=int(metadata.get("page_end", 0)),
+            version=metadata.get("version", ""),
+            publisher=metadata.get("publisher", ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "chunk_id": self.chunk_id,
+            "rank": self.rank,
+            "score": self.score,
+            "dense_score": self.dense_score,
+            "lexical_score": self.lexical_score,
+            "citation": self.citation,
+            "doc_id": self.doc_id,
+            "section": self.section,
+            "pages": [self.page_start, self.page_end],
+            "text": self.text,
+        }
+
+
+@dataclass
+class RetrievalResult:
+    """The outcome of one retrieval, including the decision not to answer."""
+
+    query: str
+    status: GroundingStatus
+    passages: list[RetrievedPassage] = field(default_factory=list)
+    best_score: float = 0.0
+    threshold: float = SIMILARITY_THRESHOLD
+    strong_threshold: float = STRONG_EVIDENCE_THRESHOLD
+    candidates_considered: int = 0
+    rejection_reason: str | None = None
+    filters: dict | None = None
+    coverage: Coverage | None = None
+    coverage_threshold: float = COVERAGE_THRESHOLD
+
+    @property
+    def is_grounded(self) -> bool:
+        return self.status == "grounded"
+
+    @property
+    def has_evidence(self) -> bool:
+        return bool(self.passages)
+
+    @property
+    def sources(self) -> list[str]:
+        """Unique citations, in rank order - what the answer should cite."""
+        seen: list[str] = []
+        for passage in self.passages:
+            if passage.citation not in seen:
+                seen.append(passage.citation)
+        return seen
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "query": self.query,
+            "status": self.status,
+            "best_score": round(self.best_score, 4),
+            "threshold": self.threshold,
+            "strong_threshold": self.strong_threshold,
+            "candidates_considered": self.candidates_considered,
+            "coverage": self.coverage.to_dict() if self.coverage else None,
+            "coverage_threshold": self.coverage_threshold,
+            "rejection_reason": self.rejection_reason,
+            "filters": self.filters,
+            "sources": self.sources,
+            "passages": [p.to_dict() for p in self.passages],
+        }
+
+
+class Retriever:
+    """Hybrid semantic + lexical retriever over the indexed corpus."""
+
+    def __init__(
+        self,
+        store: VectorStore | None = None,
+        embedder: CorpusEmbedder | None = None,
+        top_k: int = TOP_K,
+        candidate_pool: int = CANDIDATE_POOL,
+        threshold: float = SIMILARITY_THRESHOLD,
+        strong_threshold: float = STRONG_EVIDENCE_THRESHOLD,
+        coverage_threshold: float = COVERAGE_THRESHOLD,
+        dense_weight: float = DENSE_WEIGHT,
+        sparse_weight: float = SPARSE_WEIGHT,
+    ) -> None:
+        self.store = store or create_store()
+        self.embedder = embedder or CorpusEmbedder.load()
+        self.top_k = top_k
+        self.candidate_pool = candidate_pool
+        self.threshold = threshold
+        self.strong_threshold = strong_threshold
+        self.coverage_threshold = coverage_threshold
+        self.dense_weight = dense_weight
+        self.sparse_weight = sparse_weight
+
+    def retrieve(
+        self,
+        query: str,
+        top_k: int | None = None,
+        where: dict | None = None,
+    ) -> RetrievalResult:
+        """Retrieve evidence for `query`, or report that there is none."""
+        top_k = top_k or self.top_k
+        query = (query or "").strip()
+
+        if not query:
+            return RetrievalResult(
+                query=query,
+                status="ungrounded",
+                rejection_reason="Empty query.",
+                threshold=self.threshold,
+                strong_threshold=self.strong_threshold,
+            )
+
+        query_vector = self.embedder.embed_query(query)
+        candidates = self.store.query(
+            query_vector, n_results=self.candidate_pool, where=where
+        )
+
+        if not candidates:
+            return RetrievalResult(
+                query=query,
+                status="ungrounded",
+                rejection_reason="The vector store returned no candidates.",
+                threshold=self.threshold,
+                strong_threshold=self.strong_threshold,
+                filters=where,
+            )
+
+        # Chroma returns cosine *distance*; convert to similarity.
+        dense_scores = np.array(
+            [1.0 - (c.distance if c.distance is not None else 1.0) for c in candidates],
+            dtype=np.float32,
+        )
+        lexical_scores = self.embedder.lexical_similarity(
+            query, [c.text for c in candidates]
+        )
+        hybrid = self.dense_weight * dense_scores + self.sparse_weight * lexical_scores
+
+        order = np.argsort(-hybrid)
+        best_score = float(hybrid[order[0]])
+
+        if best_score < self.threshold:
+            return RetrievalResult(
+                query=query,
+                status="ungrounded",
+                best_score=best_score,
+                threshold=self.threshold,
+                strong_threshold=self.strong_threshold,
+                candidates_considered=len(candidates),
+                filters=where,
+                rejection_reason=(
+                    f"No chunk reached the similarity threshold "
+                    f"({best_score:.3f} < {self.threshold:.3f}). The approved corpus "
+                    "does not appear to cover this question."
+                ),
+            )
+
+        passages: list[RetrievedPassage] = []
+        for rank, index in enumerate(order[:top_k], start=1):
+            score = float(hybrid[index])
+            if score < self.threshold:
+                # Keep the evidence set clean: below-threshold chunks are not
+                # passed to the model merely to fill up top_k.
+                break
+            passages.append(
+                RetrievedPassage.from_stored(
+                    candidates[int(index)],
+                    score=score,
+                    dense=float(dense_scores[index]),
+                    lexical=float(lexical_scores[index]),
+                    rank=rank,
+                )
+            )
+
+        # Second signal: do the passages actually mention what was asked?
+        coverage = compute_coverage(query, [p.text for p in passages])
+
+        strong_similarity = best_score >= self.strong_threshold
+        strong_coverage = coverage.score >= self.coverage_threshold
+
+        if strong_similarity and strong_coverage:
+            status: GroundingStatus = "grounded"
+            rejection_reason = None
+        else:
+            status = "weak"
+            reasons: list[str] = []
+            if not strong_similarity:
+                reasons.append(
+                    f"best match scored {best_score:.3f}, below the strong-evidence "
+                    f"threshold of {self.strong_threshold:.3f}"
+                )
+            if not strong_coverage:
+                missing = ", ".join(coverage.missing[:5]) or "none"
+                reasons.append(
+                    f"the passages cover only {coverage.score:.0%} of the question's "
+                    f"content terms (missing: {missing})"
+                )
+            rejection_reason = (
+                "Weak evidence: "
+                + "; ".join(reasons)
+                + ". Passages are returned, but the agent must confirm they answer "
+                "the question and say so plainly if they do not."
+            )
+
+        return RetrievalResult(
+            query=query,
+            status=status,
+            passages=passages,
+            best_score=best_score,
+            threshold=self.threshold,
+            strong_threshold=self.strong_threshold,
+            candidates_considered=len(candidates),
+            rejection_reason=rejection_reason,
+            filters=where,
+            coverage=coverage,
+            coverage_threshold=self.coverage_threshold,
+        )
+
+
+# ==========================================================================
+# 8. Index construction
+# ==========================================================================
+
+
+def load_chunk_records(path: Path | None = None) -> list[dict]:
+    """Read the chunk records: from disk if present, else the built-in copy.
+
+    Passing an explicit `path` requires that file to exist - an explicit
+    request for a chunk file that is missing is an error, not a reason to fall
+    back silently.
+    """
+    global CHUNKS_SOURCE
+
+    if path is not None:
+        if not path.exists():
+            raise FileNotFoundError(f"Chunk file not found at {path}.")
+        text = path.read_text(encoding="utf-8")
+        CHUNKS_SOURCE = str(path)
+    elif CHUNKS_PATH.exists():
+        text = CHUNKS_PATH.read_text(encoding="utf-8")
+        CHUNKS_SOURCE = str(CHUNKS_PATH)
+    else:
+        text = embedded_chunks_bytes().decode("utf-8")
+        CHUNKS_SOURCE = "built-in copy"
+
+    records = [json.loads(line) for line in text.splitlines() if line.strip()]
+    if not records:
+        raise ValueError(f"No chunks found in {CHUNKS_SOURCE} - nothing to index.")
+    return records
+
+
+def build_index(chunks: list[dict] | None = None, verbose: bool = True) -> dict:
+    """Fit the embedder, embed every chunk and rebuild the vector store.
+
+    Returns the index report, which is also written to
+    data/vector_store/index_report.json.
+    """
+    chunks = chunks if chunks is not None else load_chunk_records()
+    texts = [c["text"] for c in chunks]
+
+    if verbose:
+        print(f"Loaded {len(chunks)} chunks from: {CHUNKS_SOURCE}")
+        print("Fitting the embedder on the corpus...")
+
+    embedder = CorpusEmbedder().fit(texts)
+    info = embedder.info
+    assert info is not None
+    if verbose:
+        print(
+            f"  model={info.model_name} "
+            f"dim={info.effective_dim} (requested {info.requested_dim}) "
+            f"vocab={info.vocabulary_size} "
+            f"explained_variance={info.explained_variance:.3f}"
+        )
+    embedder.save(EMBEDDER_PATH)
+    if verbose:
+        print(f"  saved -> {EMBEDDER_PATH}")
+        print("Embedding chunks...")
+
+    embeddings = embedder.embed_documents(texts)
+    if verbose:
+        print(f"  embeddings shape: {embeddings.shape}")
+
+    store = create_store()
+    if verbose:
+        print(f"Building the vector store ({store.backend})...")
+    store.reset()
+    count = store.add_chunks(chunks, embeddings)
+    if verbose:
+        print(f"  indexed {count} chunks")
+
+    stats = store.stats()
+    manifest = (
+        json.loads(CHUNK_MANIFEST_PATH.read_text(encoding="utf-8"))
+        if CHUNK_MANIFEST_PATH.exists()
+        else {}
+    )
+
+    report = {
+        "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "built_by": "src/rag/retriever.py --build",
+        "embedding": info.to_dict(),
+        "vector_store": {
+            "backend": store.backend,
+            "distance": "cosine",
+            **stats,
+        },
+        "retrieval_defaults": {
+            "candidate_pool": CANDIDATE_POOL,
+            "top_k": TOP_K,
+            "dense_weight": DENSE_WEIGHT,
+            "sparse_weight": SPARSE_WEIGHT,
+            "similarity_threshold": SIMILARITY_THRESHOLD,
+            "strong_evidence_threshold": STRONG_EVIDENCE_THRESHOLD,
+            "coverage_threshold": COVERAGE_THRESHOLD,
+        },
+        "source_chunks": {
+            "loaded_from": CHUNKS_SOURCE,
+            "register_version": manifest.get("register", {}).get("version"),
+            "chunking_strategy": manifest.get("chunking_strategy"),
+            "chunk_count": len(chunks),
+        },
+    }
+    INDEX_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    INDEX_REPORT_PATH.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+    if verbose:
+        print("\nChunks per document:")
+        for doc_id, n in stats["chunks_per_document"].items():
+            print(f"  {doc_id:<32} {n:>3}")
+        print(f"\nWrote {INDEX_REPORT_PATH}")
+
+    return report
+
+
+# ==========================================================================
+# 9. Command line entry point
+# ==========================================================================
+
+
+def _print_result(result: RetrievalResult) -> None:
+    """Human-readable rendering of one retrieval."""
+    print(f"\nQuery: {result.query}")
+    print(f"Status: {result.status.upper()}")
+    print(
+        f"Best hybrid score: {result.best_score:.3f} "
+        f"(floor {result.threshold:.2f}, strong {result.strong_threshold:.2f}) "
+        f"over {result.candidates_considered} candidates"
+    )
+    if result.coverage is not None:
+        print(
+            f"Coverage: {result.coverage.score:.0%} of "
+            f"{result.coverage.total_terms} content terms"
+            + (
+                f" (missing: {', '.join(result.coverage.missing)})"
+                if result.coverage.missing
+                else ""
+            )
+        )
+    if result.rejection_reason:
+        print(f"Note: {result.rejection_reason}")
+
+    if not result.passages:
+        print("\nNo passages returned - the agent should say it cannot answer.")
+        return
+
+    print(f"\n{len(result.passages)} passage(s):")
+    for passage in result.passages:
+        print(f"\n  [{passage.rank}] {passage.citation}")
+        print(
+            f"      score={passage.score:.3f} "
+            f"(dense={passage.dense_score:.3f}, lexical={passage.lexical_score:.3f}) "
+            f"chunk={passage.chunk_id}"
+        )
+        text = passage.text if len(passage.text) <= 400 else passage.text[:400] + "..."
+        print(f"      {text}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Vector store setup and retrieval (BSE4104, Week 3 Task 2)"
+    )
+    parser.add_argument(
+        "query",
+        nargs="?",
+        default=None,
+        help="the student question to retrieve evidence for",
+    )
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="(re)build the vector index from data/chunks.jsonl, then exit",
+    )
+    parser.add_argument("--top-k", type=int, default=TOP_K, help="passages to return")
+    parser.add_argument("--doc", default=None, help="restrict to one doc_id")
+    parser.add_argument("--category", default=None, help="restrict to one category")
+    parser.add_argument(
+        "--json", action="store_true", help="print the full result as JSON"
+    )
+    parser.add_argument(
+        "--root",
+        type=Path,
+        default=None,
+        help="project root containing data/ (default: auto-detected)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.root is not None:
+        _set_project_root(args.root.expanduser().resolve())
+
+    if args.build:
+        build_index()
+        return 0
+
+    if not args.query:
+        parser.error("give a query, or use --build to build the index first")
+
+    filters: dict[str, Any] = {}
+    if args.doc:
+        filters["doc_id"] = args.doc
+    if args.category:
+        filters["category"] = args.category
+    where = filters or None
+    if len(filters) > 1:
+        where = {"$and": [{key: value} for key, value in filters.items()]}
+
+    # Build the index on first use rather than telling the user to run a
+    # command they would only run once: an empty store is a setup step, not an
+    # error the person needs to hear about.
+    if create_store().count() == 0:
+        # To stderr, so that `--json` output stays machine-readable.
+        print(
+            "No index found - building it now (this happens once).",
+            file=sys.stderr,
+        )
+        build_index(verbose=False)
+        print("Index built.", file=sys.stderr)
+
+    retriever = Retriever(top_k=args.top_k)
+
+    result = retriever.retrieve(args.query, top_k=args.top_k, where=where)
+
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        _print_result(result)
+
+    # Exit code 0 when evidence was returned, 2 when the corpus does not cover
+    # the question, so the CLI can be used in a shell pipeline or a smoke test.
+    return 0 if result.has_evidence else 2
+
+
+def _set_project_root(root: Path) -> None:
+    """Point every path in this module at a different project root."""
+    global PROJECT_ROOT, DATA_DIR, CHUNKS_PATH, CHUNK_MANIFEST_PATH
+    global VECTOR_STORE_DIR, CHROMA_DIR, EMBEDDER_PATH, INDEX_REPORT_PATH
+
+    PROJECT_ROOT = root
+    DATA_DIR = PROJECT_ROOT / "data"
+    CHUNKS_PATH = DATA_DIR / "chunks.jsonl"
+    CHUNK_MANIFEST_PATH = DATA_DIR / "chunk_manifest.json"
+    VECTOR_STORE_DIR = DATA_DIR / "vector_store"
+    CHROMA_DIR = VECTOR_STORE_DIR / "chroma"
+    EMBEDDER_PATH = VECTOR_STORE_DIR / "embedder.joblib"
+    INDEX_REPORT_PATH = VECTOR_STORE_DIR / "index_report.json"
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except BrokenPipeError:
+        # Output was piped into something that closed early (e.g. `| head`).
+        raise SystemExit(0)
