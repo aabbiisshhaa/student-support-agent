@@ -1,0 +1,210 @@
+{
+  "generated_at": "2026-09-16T11:52:12+00:00",
+  "generated_by": "src/rag/ingest.py",
+  "register": {
+    "name": "University Student-Support Case Agent - Corpus/Source Register",
+    "version": "1.0",
+    "loaded_from": "built-in copy",
+    "corpus_read_from": "D:\\YEAR 4\\FIRST SEMESTER\\Emerging Trends in Software Engineering\\student-support-agent\\knowledge\\raw",
+    "documents_registered": 13,
+    "documents_ingested": 12,
+    "documents_skipped": [
+      {
+        "doc_id": "draft_fees_circular_2027",
+        "title": "DRAFT Fees Circular 2026/2027 (NOT APPROVED)",
+        "reason": "Unapproved draft. Senate has not ratified the 2026/2027 fees. Answering students from a draft circular would give them figures the University is not bound by, so this document is registered but excluded from the index."
+      }
+    ]
+  },
+  "chunking_strategy": {
+    "method": "section-aware sentence packing with sentence-level overlap",
+    "target_tokens": 200,
+    "max_tokens": 280,
+    "min_tokens": 60,
+    "overlap_tokens": 45,
+    "boundaries_respected": [
+      "document",
+      "section"
+    ],
+    "token_counter": "heuristic-chars-words"
+  },
+  "totals": {
+    "chunks": 101,
+    "tokens": 13761,
+    "tokens_mean": 136.2,
+    "tokens_median": 136,
+    "tokens_min": 56,
+    "tokens_max": 248,
+    "chunks_with_overlap": 6
+  },
+  "documents": [
+    {
+      "doc_id": "academic_handbook_2026",
+      "title": "Nakawa University Academic Handbook 2025/2026",
+      "format": "pdf",
+      "source_file": "academic_handbook_2026.pdf",
+      "pages": 5,
+      "blocks_after_cleaning": 20,
+      "sections": 10,
+      "chunks": 13,
+      "tokens_total": 1964,
+      "tokens_mean": 151.1,
+      "tokens_min": 80,
+      "tokens_max": 208
+    },
+    {
+      "doc_id": "academic_calendar_2026",
+      "title": "Nakawa University Academic Calendar 2025/2026",
+      "format": "pdf",
+      "source_file": "academic_calendar_2026.pdf",
+      "pages": 3,
+      "blocks_after_cleaning": 7,
+      "sections": 7,
+      "chunks": 7,
+      "tokens_total": 838,
+      "tokens_mean": 119.7,
+      "tokens_min": 72,
+      "tokens_max": 229
+    },
+    {
+      "doc_id": "examination_regulations_2026",
+      "title": "Nakawa University Examination Regulations",
+      "format": "pdf",
+      "source_file": "examination_regulations_2026.pdf",
+      "pages": 4,
+      "blocks_after_cleaning": 18,
+      "sections": 8,
+      "chunks": 9,
+      "tokens_total": 1269,
+      "tokens_mean": 141,
+      "tokens_min": 56,
+      "tokens_max": 186
+    },
+    {
+      "doc_id": "fees_policy_2026",
+      "title": "Nakawa University Student Fees and Financial Policy",
+      "format": "pdf",
+      "source_file": "fees_policy_2026.pdf",
+      "pages": 3,
+      "blocks_after_cleaning": 12,
+      "sections": 8,
+      "chunks": 8,
+      "tokens_total": 1056,
+      "tokens_mean": 132,
+      "tokens_min": 62,
+      "tokens_max": 193
+    },
+    {
+      "doc_id": "ict_portal_guidelines_2026",
+      "title": "Nakawa University ICT and Student Portal Guidelines",
+      "format": "pdf",
+      "source_file": "ict_portal_guidelines_2026.pdf",
+      "pages": 3,
+      "blocks_after_cleaning": 14,
+      "sections": 7,
+      "chunks": 7,
+      "tokens_total": 1001,
+      "tokens_mean": 143,
+      "tokens_min": 65,
+      "tokens_max": 230
+    },
+    {
+      "doc_id": "library_services_2026",
+      "title": "Nakawa University Library Services Guide",
+      "format": "pdf",
+      "source_file": "library_services_2026.pdf",
+      "pages": 3,
+      "blocks_after_cleaning": 8,
+      "sections": 8,
+      "chunks": 8,
+      "tokens_total": 892,
+      "tokens_mean": 111.5,
+      "tokens_min": 58,
+      "tokens_max": 217
+    },
+    {
+      "doc_id": "student_regulations_2026",
+      "title": "Nakawa University Student Regulations and Code of Conduct",
+      "format": "md",
+      "source_file": "student_regulations_2026.md",
+      "pages": 4,
+      "blocks_after_cleaning": 39,
+      "sections": 8,
+      "chunks": 9,
+      "tokens_total": 1218,
+      "tokens_mean": 135.3,
+      "tokens_min": 94,
+      "tokens_max": 185
+    },
+    {
+      "doc_id": "course_handbook_bse_2026",
+      "title": "Course Handbook: BSc Software Engineering",
+      "format": "md",
+      "source_file": "course_handbook_bse_2026.md",
+      "pages": 4,
+      "blocks_after_cleaning": 19,
+      "sections": 8,
+      "chunks": 8,
+      "tokens_total": 1185,
+      "tokens_mean": 148.1,
+      "tokens_min": 104,
+      "tokens_max": 215
+    },
+    {
+      "doc_id": "student_support_services_2026",
+      "title": "Nakawa University Student Support and Welfare Services",
+      "format": "md",
+      "source_file": "student_support_services_2026.md",
+      "pages": 3,
+      "blocks_after_cleaning": 21,
+      "sections": 8,
+      "chunks": 9,
+      "tokens_total": 1332,
+      "tokens_mean": 148,
+      "tokens_min": 74,
+      "tokens_max": 248
+    },
+    {
+      "doc_id": "graduation_awards_2026",
+      "title": "Nakawa University Graduation and Academic Awards Policy",
+      "format": "md",
+      "source_file": "graduation_awards_2026.md",
+      "pages": 3,
+      "blocks_after_cleaning": 22,
+      "sections": 7,
+      "chunks": 7,
+      "tokens_total": 988,
+      "tokens_mean": 141.1,
+      "tokens_min": 79,
+      "tokens_max": 181
+    },
+    {
+      "doc_id": "accommodation_policy_2026",
+      "title": "Nakawa University Accommodation and Halls of Residence Policy",
+      "format": "md",
+      "source_file": "accommodation_policy_2026.md",
+      "pages": 3,
+      "blocks_after_cleaning": 28,
+      "sections": 8,
+      "chunks": 8,
+      "tokens_total": 995,
+      "tokens_mean": 124.4,
+      "tokens_min": 88,
+      "tokens_max": 189
+    },
+    {
+      "doc_id": "complaints_appeals_2026",
+      "title": "Nakawa University Complaints, Appeals and Grievance Procedure",
+      "format": "md",
+      "source_file": "complaints_appeals_2026.md",
+      "pages": 3,
+      "blocks_after_cleaning": 26,
+      "sections": 8,
+      "chunks": 8,
+      "tokens_total": 1023,
+      "tokens_mean": 127.9,
+      "tokens_min": 61,
+      "tokens_max": 204
+    }
+  ]
+}
