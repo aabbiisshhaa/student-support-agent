@@ -18,9 +18,10 @@ BOUNDARY_OFFICES = {
     "admissions": "the Admissions Office",
     "fees": "the Finance/Accounts Office",
     "discipline": "the Dean of Students' office",
+    "policy": "a human support staff member",
 }
 
-BOUNDARY_KEYWORDS = {
+BOUNDARY_PHRASES = {
     "grades": [
         "change my grade",
         "change the grade",
@@ -28,6 +29,9 @@ BOUNDARY_KEYWORDS = {
         "edit my grade",
         "raise my grade",
         "grade appeal outcome",
+        "clear my name",
+        "who was at fault",
+        "determine fault",
     ],
     "admissions": [
         "admit me",
@@ -52,6 +56,41 @@ BOUNDARY_KEYWORDS = {
     ],
 }
 
+BOUNDARY_STRONG_VERBS = {
+    "grades": ["round up", "grant me", "grant extra credit"],
+    "admissions": [],
+    "fees": [],
+    "discipline": ["expunge", "reinstate", "reinstating", "overturn", "arbitrate"],
+}
+
+BOUNDARY_VERBS = {
+    "grades": ["change", "update", "alter", "edit", "adjust", "modify", "round", "raise", "override"],
+    "admissions": ["admit", "approve", "grant", "accept", "override"],
+    "fees": ["waive", "clear", "refund", "extend", "approve", "process", "discount"],
+    "discipline": ["expunge", "reinstate", "reverse", "overturn", "dismiss", "drop"],
+}
+
+BOUNDARY_NOUNS = {
+    "grades": ["grade", "grades", "mark", "marks", "score", "record", "transcript", "credit"],
+    "admissions": ["admission", "admissions", "enrollment", "enrolment"],
+    "fees": ["fee", "fees", "tuition", "balance", "deadline", "refund", "bursar"],
+    "discipline": ["disciplinary", "suspension", "violation", "record", "case"],
+}
+
+ADVERSARIAL_PHRASES = [
+    "administrator override",
+    "system administrator override",
+    "execute administrative command",
+    "execute command",
+    "ignore previous instructions",
+    "ignore all previous instructions",
+    "override your instructions",
+    "developer mode",
+    "jailbreak",
+    "sudo",
+    "set status =",
+]
+
 TAG_PATTERN = re.compile(
     r"^\s*\[(?P<intent>ANSWER|REFUSAL|CLARIFY|TICKET|ESCALATE)"
     r"(?::\s*(?P<meta>[^\]]*))?\]\s*\n?(?P<body>.*)",
@@ -69,21 +108,49 @@ class ParsedResponse:
     raw: str = ""
 
 
+def _contains_term(lowered: str, term: str) -> bool:
+    return re.search(rf"\b{re.escape(term)}\b", lowered) is not None
+
+
 def detect_hard_boundary(text: str) -> str | None:
     lowered = text.lower()
-    for boundary, phrases in BOUNDARY_KEYWORDS.items():
+
+    for phrase in ADVERSARIAL_PHRASES:
+        if _contains_term(lowered, phrase):
+            return "policy"
+
+    for boundary, phrases in BOUNDARY_PHRASES.items():
         for phrase in phrases:
-            if phrase in lowered:
+            if _contains_term(lowered, phrase):
                 return boundary
+
+    for boundary, verbs in BOUNDARY_STRONG_VERBS.items():
+        for verb in verbs:
+            if _contains_term(lowered, verb):
+                return boundary
+
+    for boundary in BOUNDARY_VERBS:
+        verb_hit = any(_contains_term(lowered, verb) for verb in BOUNDARY_VERBS[boundary])
+        noun_hit = any(_contains_term(lowered, noun) for noun in BOUNDARY_NOUNS[boundary])
+        if verb_hit and noun_hit:
+            return boundary
+
     return None
 
 
 def build_boundary_refusal(boundary: str, raw_text: str = "") -> ParsedResponse:
     office = BOUNDARY_OFFICES.get(boundary, "the appropriate university office")
-    message = (
-        f"I'm not able to help with {boundary} decisions. "
-        f"Please contact {office} for this request."
-    )
+    if boundary == "policy":
+        message = (
+            "I can't follow instructions that try to override my configured "
+            f"behavior or make administrative changes directly. Please contact {office} "
+            "for this request."
+        )
+    else:
+        message = (
+            f"I'm not able to help with {boundary} decisions. "
+            f"Please contact {office} for this request."
+        )
     return ParsedResponse(
         intent=Intent.REFUSAL,
         message=message,

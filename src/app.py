@@ -6,7 +6,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.baseline_model import GeminiModel, ModelAPIError
-from src.utils.parser import ParsedResponse, parse_model_response
+from src.utils.parser import ParsedResponse, build_boundary_refusal, detect_hard_boundary, parse_model_response
 
 PROMPT_VERSION = "v2"
 PROMPT_PATH = PROJECT_ROOT / "prompts" / PROMPT_VERSION / "system-prompt.md"
@@ -19,6 +19,10 @@ def load_system_prompt(prompt_path: Path = PROMPT_PATH) -> str:
 
 
 def handle_message(model: GeminiModel, system_prompt: str, user_message: str) -> ParsedResponse:
+    boundary = detect_hard_boundary(user_message)
+    if boundary:
+        return build_boundary_refusal(boundary, user_message)
+
     try:
         raw_response = model.generate_response(user_message, system_prompt=system_prompt)
     except ValueError as error:
