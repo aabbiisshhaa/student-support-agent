@@ -1,4 +1,4 @@
-# WEEK 23 PROGRESS REPORT: Grounding with RAG & Deterministic Tool Execution
+# WEEK 3 PROGRESS REPORT: Grounding with RAG & Deterministic Tool Execution
 
 **Course:** BSE4104 Emerging Trends in Software Engineering – Capstone Project
 **Project:** AI-Native University Student Support Case Agent
