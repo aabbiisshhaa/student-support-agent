@@ -1,5 +1,5 @@
 {
-  "built_at": "2026-09-16T12:00:42+00:00",
+  "built_at": "2026-09-17T13:47:02+00:00",
   "built_by": "src/rag/retriever.py --build",
   "embedding": {
     "model_name": "tfidf-svd-lsa-v1",
@@ -14,7 +14,7 @@
     "backend": "numpy embeddings cache",
     "distance": "cosine",
     "collection": "university_policy_corpus",
-    "persist_dir": "D:\\YEAR 4\\FIRST SEMESTER\\Emerging Trends in Software Engineering\\student-support-agent\\data\\vector_store\\numpy_index",
+    "persist_dir": "C:\\notes\\NOTES\\year four\\graces thing\\student-support-agent\\data\\vector_store\\numpy_index",
     "chunks": 101,
     "documents": 12,
     "chunks_per_document": {
@@ -53,7 +53,7 @@
     "coverage_threshold": 0.7
   },
   "source_chunks": {
-    "loaded_from": "D:\\YEAR 4\\FIRST SEMESTER\\Emerging Trends in Software Engineering\\student-support-agent\\data\\chunks.jsonl",
+    "loaded_from": "C:\\notes\\NOTES\\year four\\graces thing\\student-support-agent\\data\\chunks.jsonl",
     "register_version": "1.0",
     "chunking_strategy": {
       "method": "section-aware sentence packing with sentence-level overlap",
