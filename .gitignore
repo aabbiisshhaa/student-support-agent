@@ -3,3 +3,6 @@
 __pycache__/
 *.py[cod]
 *.db
+
+# Vector store build artifacts
+data/vector_store/*
