@@ -18,6 +18,7 @@ from src.baseline_model import GeminiModel, ModelAPIError
 from src.rag.retriever import Retriever, EmbedderInfo
 from src.tools.timetable_tool import get_course_schedule
 from src.tools.ticket_tool import create_support_ticket
+from src.agent.memory import ConversationMemory
 
 
 # Provide namespace hook for joblib unpickling
@@ -26,71 +27,7 @@ setattr(__main__, "EmbedderInfo", EmbedderInfo)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 logger = logging.getLogger("AgentOrchestrator")
-
-# --- In-Memory & Persistent Conversation Memory ---
-class ConversationMemory:
-    """Manages conversational turn state with bounded sliding-window retention."""
-
-    def __init__(self, max_history_turns: int = 10, storage_dir: Optional[str] = None):
-        self.max_history_turns = max_history_turns
-        self.storage_dir = Path(storage_dir) if storage_dir else PROJECT_ROOT / "data" / "sessions"
-        self.storage_dir.mkdir(parents=True, exist_ok=True)
-        self.sessions: Dict[str, List[Dict[str, Any]]] = {}
-        self.metadata: Dict[str, Dict[str, Any]] = {}
-        self._load_sessions()
-
-    def _load_sessions(self):
-        for file in self.storage_dir.glob("*.json"):
-            try:
-                data = json.loads(file.read_text(encoding="utf-8"))
-                sid = data.get("session_id")
-                if sid:
-                    self.sessions[sid] = data.get("transcript", [])
-                    self.metadata[sid] = data.get("metadata", {})
-            except Exception:
-                continue
-
-    def initialize_session(self, session_id: str, student_id: str = "2300712345"):
-        if session_id not in self.sessions:
-            self.sessions[session_id] = []
-            self.metadata[session_id] = {
-                "created_at": time.time(),
-                "last_active": time.time(),
-                "student_id": student_id,
-                "turn_count": 0
-            }
-            self._save_session(session_id)
-            
-    def add_turn(self, session_id: str, role: str, content: str):
-            if session_id not in self.sessions:
-                self.initialize_session(session_id)
-
-            self.sessions[session_id].append({
-                "role": role,
-                "content": content,
-                "timestamp": time.time()
-            })
-            self.metadata[session_id]["last_active"] = time.time()
-            self.metadata[session_id]["turn_count"] = len(self.sessions[session_id])
-
-            # Enforce sliding-window retention (prune oldest turns FIFO)
-            while len(self.sessions[session_id]) > self.max_history_turns:
-                self.sessions[session_id].pop(0)
-
-            self._save_session(session_id)
-
-    def get_recent_history(self, session_id: str, turns: int = 4) -> List[Dict[str, Any]]:
-        return self.sessions.get(session_id, [])[-turns:]
-
-    def _save_session(self, session_id: str):
-        file_path = self.storage_dir / f"{session_id}.json"
-        payload = {
-            "session_id": session_id,
-            "metadata": self.metadata.get(session_id, {}),
-            "transcript": self.sessions.get(session_id, [])
-        }
-        file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")            
-            
+    
 # --- Orchestrator Implementation ---
 class SupportAgentOrchestrator:
     # Sense-Plan-Act-Observe-Revise Autonomous Orchestrator.
@@ -137,7 +74,7 @@ CRITICAL RULES:
         return self._retriever_instance
 
     def run(self, session_id: str, user_query: str) -> Dict[str, Any]:
-        """Runs the primary Sense -> Plan -> Act -> Observe -> Revise cycle."""
+        # Runs the primary Sense -> Plan -> Act -> Observe -> Revise cycle."""
         logger.info(f"[{session_id}] SENSE: Processing user turn...")
         self.memory.initialize_session(session_id)
 
@@ -282,7 +219,7 @@ CRITICAL RULES:
         context: List[Dict[str, Any]],
         observation: str
     ) -> str:
-        """Synthesizes the response using live GeminiModel when available, or formatted fallback."""
+        # Synthesizes the response using live GeminiModel when available, or formatted fallback."""
         if self.has_live_model:
             user_prompt = f"""
 Student Question:

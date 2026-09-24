@@ -81,7 +81,7 @@ Or as a library:
 
 Requirements: standard library only.
 
-Owner: Pauline Peace (PP).
+Owners: Pauline Peace (PP), Abisha Baingana (AB).
 """
 
 from __future__ import annotations
@@ -164,12 +164,23 @@ class Message:
         return asdict(self)
 
     @staticmethod
-    def from_dict(data: dict) -> "Message":
-        return Message(
-            turn_index=data["turn_index"],
-            role=data["role"],
-            content=data["content"],
-            timestamp=data.get("timestamp", _now_iso()),
+    def from_dict(data: dict) -> "SessionState":
+        # Handle cases where created_at might be in a metadata sub-dict or missing
+        created = data.get("created_at") or data.get("metadata", {}).get("created_at", _now_iso())
+        last_active = data.get("last_active_at") or data.get("metadata", {}).get("last_active", _now_iso())
+        student_ref = data.get("student_ref") or data.get("metadata", {}).get("student_id")
+        
+        return SessionState(
+            session_id=data["session_id"],
+            student_ref=student_ref,
+            created_at=str(created),
+            last_active_at=str(last_active),
+            status=data.get("status", "active"),
+            turn_count=data.get("turn_count", 0),
+            window_size=data.get("window_size", DEFAULT_WINDOW_SIZE),
+            messages=[Message.from_dict(m) for m in data.get("messages", [])],
+            summary=data.get("summary"),
+            summarized_turns=data.get("summarized_turns", 0),
         )
 
 
@@ -268,19 +279,21 @@ class SessionMemoryManager:
     """
 
     def __init__(
-        self,
-        window_size: int = DEFAULT_WINDOW_SIZE,
-        sessions_dir: Path = SESSIONS_DIR,
-        persist: bool = True,
-    ) -> None:
-        self.window_size = window_size
-        self.sessions_dir = sessions_dir
-        self.persist = persist
-        self._sessions: dict[str, SessionState] = {}
-        self._active_ids: set[str] = set()
-        if self.persist:
-            self.sessions_dir.mkdir(parents=True, exist_ok=True)
-            self._active_ids = set(self._read_active_index())
+            self,
+            window_size: int = DEFAULT_WINDOW_SIZE,
+            sessions_dir: Path = SESSIONS_DIR,
+            persist: bool = True,
+            retention_days: int = 30,
+        ) -> None:
+            self.window_size = window_size
+            self.sessions_dir = sessions_dir
+            self.persist = persist
+            self.retention_seconds = retention_days * 24 * 3600
+            self._sessions: dict[str, SessionState] = {}
+            self._active_ids: set[str] = set()
+            if self.persist:
+                self.sessions_dir.mkdir(parents=True, exist_ok=True)
+                self._active_ids = set(self._read_active_index())
 
     # -- session lifecycle -------------------------------------------------
 
@@ -322,7 +335,25 @@ class SessionMemoryManager:
                 self.get_session(session_id)
                 return session_id
             except SessionNotFoundError:
-                pass
+                # If session_id passed explicitly, use it rather than forcing next counter
+                now = _now_iso()
+                state = SessionState(
+                    session_id=session_id,
+                    student_ref=student_ref,
+                    created_at=now,
+                    last_active_at=now,
+                    status="active",
+                    turn_count=0,
+                    window_size=self.window_size,
+                    messages=[],
+                    summary=None,
+                    summarized_turns=0,
+                )
+                self._sessions[session_id] = state
+                self._active_ids.add(session_id)
+                self._save(state)
+                self._write_active_index()
+                return session_id
         return self.create_session(student_ref=student_ref)
 
     def close_session(self, session_id: str) -> None:
@@ -436,7 +467,63 @@ class SessionMemoryManager:
                 n = 1
         COUNTER_PATH.write_text(json.dumps({"next": n + 1}), encoding="utf-8")
         return f"{SESSION_ID_PREFIX}-{n:03d}"
+    
+    
+    # -- compatibility bridges for orchestrator --------------------------
 
+    def initialize_session(self, session_id: str, student_id: str = "2300712345") -> str:
+        """Alias bridge for orchestrator initialization."""
+        return self.get_or_create(session_id=session_id, student_ref=student_id)
+
+    def get_recent_history(self, session_id: str, turns: int = 4) -> list[dict]:
+        """Returns the most recent verbatim turns for orchestrator prompt synthesis."""
+        try:
+            state = self.get_session(session_id)
+            recent = state.messages[-turns:]
+            return [{"role": m.role, "content": m.content} for m in recent]
+        except SessionNotFoundError:
+            return []
+
+    # -- gdpr & retention compliance ------------------------------------
+
+    def delete_session(self, session_id: str) -> bool:
+        """Permanently purges a session from RAM and disk for institutional GDPR compliance."""
+        deleted = False
+        if session_id in self._sessions:
+            del self._sessions[session_id]
+            deleted = True
+
+        self._active_ids.discard(session_id)
+        if self.persist:
+            self._write_active_index()
+            path = self._path_for(session_id)
+            if path.exists():
+                path.unlink()
+                deleted = True
+        return deleted
+
+    def cleanup_expired_sessions(self) -> int:
+        """Purges sessions older than the retention threshold from disk and memory."""
+        now = datetime.now(timezone.utc)
+        expired = 0
+        all_ids = set(self._active_ids)
+        if self.persist:
+            for f in self.sessions_dir.glob(f"{SESSION_ID_PREFIX}-*.json"):
+                all_ids.add(f.stem)
+
+        for sid in all_ids:
+            try:
+                state = self.get_session(sid)
+                last_time = datetime.fromisoformat(state.last_active_at)
+                if (now - last_time).total_seconds() > self.retention_seconds:
+                    self.delete_session(sid)
+                    expired += 1
+            except Exception:
+                continue
+        return expired
+
+# Backwards-compatibility alias for orchestrator imports
+ConversationMemory = SessionMemoryManager
 
 # ==========================================================================
 # 6. Stub responder - for the demo transcript only, not the real agent
