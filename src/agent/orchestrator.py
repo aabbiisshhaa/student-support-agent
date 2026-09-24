@@ -19,6 +19,7 @@ from src.rag.retriever import Retriever, EmbedderInfo
 from src.tools.timetable_tool import get_course_schedule
 from src.tools.ticket_tool import create_support_ticket
 from src.agent.memory import ConversationMemory
+from src.telemetry.tracker import TelemetryTracker, TurnTelemetry
 
 
 # Provide namespace hook for joblib unpickling
@@ -57,6 +58,7 @@ CRITICAL RULES:
 
     def __init__(self, memory_manager: Optional[ConversationMemory] = None, max_iterations: int = 3):
             self.memory = memory_manager or ConversationMemory()
+            self.telemetry = TelemetryTracker()
             self.max_iterations = max_iterations
             self._retriever_instance: Optional[Retriever] = None
 
@@ -74,9 +76,20 @@ CRITICAL RULES:
         return self._retriever_instance
 
     def run(self, session_id: str, user_query: str) -> Dict[str, Any]:
-        # Runs the primary Sense -> Plan -> Act -> Observe -> Revise cycle."""
+        # Runs the primary Sense -> Plan -> Act -> Observe -> Revise cycle with telemetry instrumentation."""
+        start_time = time.time()
+        tool_start_total = 0.0
+        tools_used = []
+        
         logger.info(f"[{session_id}] SENSE: Processing user turn...")
         self.memory.initialize_session(session_id)
+        
+        turn_idx = len(self.memory.get_recent_history(session_id)) + 1
+        turn_metrics = TurnTelemetry(
+            session_id=session_id,
+            turn_index=turn_idx,
+            user_query=user_query,
+        )
 
         # 1. Deterministic Safety Boundary Refusal (Iteration 0)
         query_lower = user_query.lower()
@@ -84,11 +97,16 @@ CRITICAL RULES:
             logger.warning(f"[{session_id}] SAFETY REFUSAL: Prohibited intent detected.")
             self.memory.add_turn(session_id, "user", user_query)
             self.memory.add_turn(session_id, "assistant", self.HARD_REFUSAL_MESSAGE)
+            
+            turn_metrics.status = "refused"
+            turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
+            self.telemetry.record_turn(turn_metrics)
+            
             return {
                 "status": "refused",
                 "response": self.HARD_REFUSAL_MESSAGE,
                 "escalation_required": True,
-                "iterations": 0
+                "iterations": 0,
             }
 
         self.memory.add_turn(session_id, "user", user_query)
@@ -97,8 +115,7 @@ CRITICAL RULES:
         iteration = 0
         observation = ""
         context_snippets = []
-        
-        
+
         # 2. Multi-Step Execution Loop
         while iteration < self.max_iterations:
             iteration += 1
@@ -108,6 +125,7 @@ CRITICAL RULES:
 
             if plan["action"] == "RETRIEVE_KNOWLEDGE":
                 logger.info(f"[{session_id}] ACT: Retrieving RAG knowledge chunks...")
+                t0 = time.time()
                 try:
                     retriever = self._get_retriever()
                     rag_result = retriever.retrieve(plan["query"], top_k=2)
@@ -117,36 +135,58 @@ CRITICAL RULES:
                             for p in rag_result.passages
                         ]
                         observation = f"Policy Evidence: {json.dumps(context_snippets)}"
-                        logger.info(f"[{session_id}] OBSERVE: Found {len(context_snippets)} policy chunks.")
                     else:
                         observation = "No relevant policy documents found in the university database."
-                        logger.info(f"[{session_id}] OBSERVE: Found 0 policy chunks.")
                 except Exception as e:
                     logger.error(f"Error during RAG retrieval: {e}")
                     observation = f"Knowledge base lookup failed: {str(e)}"
+                
+                tool_start_total += (time.time() - t0)
+                tools_used.append("retriever")
 
             elif plan["action"] == "EXECUTE_TOOL":
                 tool_name = plan["tool_name"]
                 tool_params = plan["tool_params"]
                 logger.info(f"[{session_id}] ACT: Executing tool '{tool_name}' with {tool_params}")
+                
+                t0 = time.time()
                 tool_result = self._dispatch_tool(tool_name, tool_params)
+                tool_start_total += (time.time() - t0)
+                tools_used.append(tool_name)
+                
                 observation = f"Tool Result: {json.dumps(tool_result)}"
                 logger.info(f"[{session_id}] OBSERVE: Tool execution completed.")
 
             elif plan["action"] == "FINAL_SYNTHESIS":
                 logger.info(f"[{session_id}] REVISE: Synthesizing final response...")
+                m_start = time.time()
                 final_answer = self._synthesize_response(
                     user_query=user_query,
                     history=session_history,
                     context=context_snippets,
-                    observation=observation
+                    observation=observation,
                 )
+                m_latency = (time.time() - m_start) * 1000
                 self.memory.add_turn(session_id, "assistant", final_answer)
+
+                # Collect prompt and response token estimates
+                prompt_approx = (len(user_query) + len(observation) + len(str(session_history))) // 4
+                comp_approx = len(final_answer) // 4
+
+                turn_metrics.model_latency_ms = m_latency
+                turn_metrics.tool_latency_ms = tool_start_total * 1000
+                turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
+                turn_metrics.prompt_tokens = prompt_approx
+                turn_metrics.completion_tokens = comp_approx
+                turn_metrics.total_tokens = prompt_approx + comp_approx
+                turn_metrics.tools_invoked = tools_used
+                self.telemetry.record_turn(turn_metrics)
+
                 return {
                     "status": "success",
                     "response": final_answer,
                     "escalation_required": False,
-                    "iterations": iteration
+                    "iterations": iteration,
                 }
 
         # Safe loop termination fallback

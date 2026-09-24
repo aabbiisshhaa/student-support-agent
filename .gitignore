@@ -8,3 +8,7 @@ __pycache__/
 data/vector_store/*
 
 logs/
+
+# Telemetry logs and test sessions
+data/sessions/
+data/telemetry/

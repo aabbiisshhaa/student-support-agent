@@ -164,23 +164,12 @@ class Message:
         return asdict(self)
 
     @staticmethod
-    def from_dict(data: dict) -> "SessionState":
-        # Handle cases where created_at might be in a metadata sub-dict or missing
-        created = data.get("created_at") or data.get("metadata", {}).get("created_at", _now_iso())
-        last_active = data.get("last_active_at") or data.get("metadata", {}).get("last_active", _now_iso())
-        student_ref = data.get("student_ref") or data.get("metadata", {}).get("student_id")
-        
-        return SessionState(
-            session_id=data["session_id"],
-            student_ref=student_ref,
-            created_at=str(created),
-            last_active_at=str(last_active),
-            status=data.get("status", "active"),
-            turn_count=data.get("turn_count", 0),
-            window_size=data.get("window_size", DEFAULT_WINDOW_SIZE),
-            messages=[Message.from_dict(m) for m in data.get("messages", [])],
-            summary=data.get("summary"),
-            summarized_turns=data.get("summarized_turns", 0),
+    def from_dict(data: dict) -> "Message":
+        return Message(
+            turn_index=data.get("turn_index", 0),
+            role=data.get("role", "user"),
+            content=data.get("content", ""),
+            timestamp=data.get("timestamp", _now_iso()),
         )
 
 
@@ -206,19 +195,31 @@ class SessionState:
 
     @staticmethod
     def from_dict(data: dict) -> "SessionState":
+        created = data.get("created_at") or data.get("metadata", {}).get("created_at", _now_iso())
+        last_active = data.get("last_active_at") or data.get("metadata", {}).get("last_active", _now_iso())
+        student_ref = data.get("student_ref") or data.get("metadata", {}).get("student_id")
+        
+        # Support both 'messages' (dataclass) and 'transcript' (legacy format)
+        raw_messages = data.get("messages") or data.get("transcript") or []
+        parsed_messages = []
+        for idx, m in enumerate(raw_messages, 1):
+            if isinstance(m, dict):
+                if "turn_index" not in m:
+                    m["turn_index"] = idx
+                parsed_messages.append(Message.from_dict(m))
+
         return SessionState(
-            session_id=data["session_id"],
-            student_ref=data.get("student_ref"),
-            created_at=data["created_at"],
-            last_active_at=data["last_active_at"],
+            session_id=data.get("session_id", "unknown-session"),
+            student_ref=student_ref,
+            created_at=str(created),
+            last_active_at=str(last_active),
             status=data.get("status", "active"),
-            turn_count=data.get("turn_count", 0),
+            turn_count=data.get("turn_count", len(parsed_messages)),
             window_size=data.get("window_size", DEFAULT_WINDOW_SIZE),
-            messages=[Message.from_dict(m) for m in data.get("messages", [])],
+            messages=parsed_messages,
             summary=data.get("summary"),
             summarized_turns=data.get("summarized_turns", 0),
         )
-
 
 # ==========================================================================
 # 4. Deterministic summarisation rule
