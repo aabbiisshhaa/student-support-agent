@@ -6,3 +6,9 @@ __pycache__/
 
 # Vector store build artifacts
 data/vector_store/*
+
+logs/
+
+# Telemetry logs and test sessions
+data/sessions/
+data/telemetry/
