@@ -65,7 +65,7 @@ During Week 3, the team transitioned the Student Support Case Agent from standal
 
 ---
 
-### 6. Next Steps (Week 3 Plans)
+### 6. Next Steps (Week 4 Plans)
 
 1. Implement multi-turn conversational memory and session state management.
 2. Build end-to-end integration tests orchestrating RAG retrieval, tool execution, and boundary refusal workflows.
