@@ -389,6 +389,14 @@ class SessionMemoryManager:
         self._save(state)
         return state
 
+    def replace_last_assistant_turn(self, session_id: str, content: str) -> bool:
+        state = self.get_session(session_id)
+        if not state.messages or state.messages[-1].role != "assistant":
+            return False
+        state.messages[-1].content = content
+        self._save(state)
+        return True
+
     def get_context(self, session_id: str, include_summary: bool = True) -> list[dict]:
         """Conversation so far, ready to hand to the RAG/agent layer.
 

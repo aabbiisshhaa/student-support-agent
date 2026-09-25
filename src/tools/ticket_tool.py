@@ -4,6 +4,7 @@ import os
 import re
 import sqlite3
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import TypedDict
 
@@ -17,8 +18,21 @@ DEFAULT_DATABASE_URL = "sqlite:///./student_support.db"
 STUDENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9/_-]{2,29}$")
 CASE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$")
 
-VALID_CATEGORIES = {"timetable", "policy", "administrative", "other"}
-VALID_PRIORITIES = {"low", "medium", "high"}
+class TicketCategory(str, Enum):
+    TIMETABLE = "timetable"
+    POLICY = "policy"
+    ADMINISTRATIVE = "administrative"
+    OTHER = "other"
+
+
+class TicketPriority(str, Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+VALID_CATEGORIES = {category.value for category in TicketCategory}
+VALID_PRIORITIES = {priority.value for priority in TicketPriority}
 
 CATEGORY_QUEUES = {
     "timetable": "Timetable & Registration Queue",
@@ -106,16 +120,18 @@ def _validate_original_message(original_message: str) -> str:
     return original_message
 
 
-def _validate_category(category: str) -> str:
-    if category not in VALID_CATEGORIES:
+def _validate_category(category: str | TicketCategory) -> str:
+    value = category.value if isinstance(category, Enum) else category
+    if not isinstance(value, str) or value not in VALID_CATEGORIES:
         raise TicketValidationError(f"Invalid category: {category!r}")
-    return category
+    return value
 
 
-def _validate_priority(priority: str) -> str:
-    if priority not in VALID_PRIORITIES:
+def _validate_priority(priority: str | TicketPriority) -> str:
+    value = priority.value if isinstance(priority, Enum) else priority
+    if not isinstance(value, str) or value not in VALID_PRIORITIES:
         raise TicketValidationError(f"Invalid priority: {priority!r}")
-    return priority
+    return value
 
 
 def _validate_student_confirmed(student_confirmed: bool) -> None:
@@ -127,8 +143,8 @@ def create_support_ticket(
     student_id: str,
     summary: str,
     original_message: str,
-    category: str,
-    priority: str,
+    category: str | TicketCategory,
+    priority: str | TicketPriority,
     student_confirmed: bool,
     case_id: str | None = None,
 ) -> TicketRecord:
