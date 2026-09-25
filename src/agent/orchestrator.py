@@ -1,12 +1,13 @@
 # Multi-Step Agent Orchestrator: Sense -> Plan -> Act -> Observe -> Revise
 
 import os
+import re
 import sys
 import time
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Callable, Dict, Any, List, Optional
 
 # Ensure workspace root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -17,9 +18,16 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.baseline_model import GeminiModel, ModelAPIError
 from src.rag.retriever import Retriever, EmbedderInfo
 from src.tools.timetable_tool import get_course_schedule
-from src.tools.ticket_tool import create_support_ticket
+from src.tools.ticket_tool import create_support_ticket, TicketCategory, TicketPriority
 from src.agent.memory import ConversationMemory
 from src.telemetry.tracker import TelemetryTracker, TurnTelemetry
+
+DEFAULT_STUDENT_ID = "2300712345"
+COURSE_CODE_IN_QUERY = re.compile(r"\b[A-Za-z]{3}\d{4}\b")
+TICKET_SUMMARY_MIN_LENGTH = 10
+TICKET_SUMMARY_MAX_LENGTH = 80
+
+EventCallback = Callable[[Dict[str, Any]], None]
 
 
 # Provide namespace hook for joblib unpickling
@@ -75,14 +83,50 @@ CRITICAL RULES:
             self._retriever_instance = Retriever(top_k=2)
         return self._retriever_instance
 
-    def run(self, session_id: str, user_query: str) -> Dict[str, Any]:
+    @staticmethod
+    def _emit(on_event: Optional[EventCallback], event: Dict[str, Any]) -> None:
+        if on_event is not None:
+            on_event(event)
+
+    def _finish_tool_call(
+        self,
+        on_event: Optional[EventCallback],
+        tool_name: str,
+        params: Dict[str, Any],
+        result: Any,
+        elapsed_seconds: float,
+    ) -> Dict[str, Any]:
+        failed = isinstance(result, dict) and "error" in result
+        record = {
+            "tool": tool_name,
+            "params": params,
+            "status": "error" if failed else "ok",
+            "result": result,
+            "latency_ms": elapsed_seconds * 1000,
+        }
+        self._emit(on_event, {
+            "event": "tool_end",
+            "tool": tool_name,
+            "status": record["status"],
+            "latency_ms": record["latency_ms"],
+        })
+        return record
+
+    def run(
+        self,
+        session_id: str,
+        user_query: str,
+        student_id: str = DEFAULT_STUDENT_ID,
+        on_event: Optional[EventCallback] = None,
+    ) -> Dict[str, Any]:
         # Runs the primary Sense -> Plan -> Act -> Observe -> Revise cycle with telemetry instrumentation."""
         start_time = time.time()
         tool_start_total = 0.0
         tools_used = []
-        
+        tool_calls: List[Dict[str, Any]] = []
+
         logger.info(f"[{session_id}] SENSE: Processing user turn...")
-        self.memory.initialize_session(session_id)
+        self.memory.initialize_session(session_id, student_id)
         
         turn_idx = len(self.memory.get_recent_history(session_id)) + 1
         turn_metrics = TurnTelemetry(
@@ -107,6 +151,7 @@ CRITICAL RULES:
                 "response": self.HARD_REFUSAL_MESSAGE,
                 "escalation_required": True,
                 "iterations": 0,
+                "tool_calls": tool_calls,
             }
 
         self.memory.add_turn(session_id, "user", user_query)
@@ -121,11 +166,13 @@ CRITICAL RULES:
             iteration += 1
             logger.info(f"[{session_id}] PLAN: Iteration {iteration}/{self.max_iterations}")
 
-            plan = self._plan_next_step(user_query, session_history, observation)
+            plan = self._plan_next_step(user_query, session_history, observation, student_id)
 
             if plan["action"] == "RETRIEVE_KNOWLEDGE":
                 logger.info(f"[{session_id}] ACT: Retrieving RAG knowledge chunks...")
+                self._emit(on_event, {"event": "tool_start", "tool": "retriever"})
                 t0 = time.time()
+                retrieval_result: Any = []
                 try:
                     retriever = self._get_retriever()
                     rag_result = retriever.retrieve(plan["query"], top_k=2)
@@ -134,26 +181,37 @@ CRITICAL RULES:
                             {"text": p.text, "citation": p.citation, "doc": p.doc_title}
                             for p in rag_result.passages
                         ]
+                        retrieval_result = context_snippets
                         observation = f"Policy Evidence: {json.dumps(context_snippets)}"
                     else:
                         observation = "No relevant policy documents found in the university database."
                 except Exception as e:
                     logger.error(f"Error during RAG retrieval: {e}")
                     observation = f"Knowledge base lookup failed: {str(e)}"
-                
-                tool_start_total += (time.time() - t0)
+                    retrieval_result = {"error": str(e)}
+
+                elapsed = time.time() - t0
+                tool_start_total += elapsed
                 tools_used.append("retriever")
+                tool_calls.append(self._finish_tool_call(
+                    on_event, "retriever", {"query": plan["query"]}, retrieval_result, elapsed
+                ))
 
             elif plan["action"] == "EXECUTE_TOOL":
                 tool_name = plan["tool_name"]
                 tool_params = plan["tool_params"]
                 logger.info(f"[{session_id}] ACT: Executing tool '{tool_name}' with {tool_params}")
-                
+                self._emit(on_event, {"event": "tool_start", "tool": tool_name})
+
                 t0 = time.time()
                 tool_result = self._dispatch_tool(tool_name, tool_params)
-                tool_start_total += (time.time() - t0)
+                elapsed = time.time() - t0
+                tool_start_total += elapsed
                 tools_used.append(tool_name)
-                
+                tool_calls.append(self._finish_tool_call(
+                    on_event, tool_name, tool_params, tool_result, elapsed
+                ))
+
                 observation = f"Tool Result: {json.dumps(tool_result)}"
                 logger.info(f"[{session_id}] OBSERVE: Tool execution completed.")
 
@@ -173,6 +231,14 @@ CRITICAL RULES:
                 prompt_approx = (len(user_query) + len(observation) + len(str(session_history))) // 4
                 comp_approx = len(final_answer) // 4
 
+                ticket_created = any(
+                    call["tool"] == "create_support_ticket" and call["status"] == "ok"
+                    for call in tool_calls
+                )
+                tool_failed = any(call["status"] == "error" for call in tool_calls)
+                turn_status = "tool_error" if tool_failed else "success"
+
+                turn_metrics.status = turn_status
                 turn_metrics.model_latency_ms = m_latency
                 turn_metrics.tool_latency_ms = tool_start_total * 1000
                 turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
@@ -183,28 +249,49 @@ CRITICAL RULES:
                 self.telemetry.record_turn(turn_metrics)
 
                 return {
-                    "status": "success",
+                    "status": turn_status,
                     "response": final_answer,
-                    "escalation_required": False,
+                    "escalation_required": ticket_created,
                     "iterations": iteration,
+                    "tool_calls": tool_calls,
                 }
 
         # Safe loop termination fallback
         fallback = "I was unable to resolve your inquiry within the allowed execution cycles. Escalating to staff."
         self.memory.add_turn(session_id, "assistant", fallback)
-        return {"status": "max_iterations_reached", "response": fallback, "escalation_required": True, "iterations": iteration}
+        return {
+            "status": "max_iterations_reached",
+            "response": fallback,
+            "escalation_required": True,
+            "iterations": iteration,
+            "tool_calls": tool_calls,
+        }
 
-    def _plan_next_step(self, query: str, history: List[Dict], observation: str) -> Dict[str, Any]:
+    @staticmethod
+    def _ticket_summary(query: str) -> str:
+        text = " ".join(query.split())
+        if len(text) < TICKET_SUMMARY_MIN_LENGTH:
+            text = f"Student request: {text}"
+        return text[:TICKET_SUMMARY_MAX_LENGTH]
+
+    def _plan_next_step(
+        self,
+        query: str,
+        history: List[Dict],
+        observation: str,
+        student_id: str = DEFAULT_STUDENT_ID,
+    ) -> Dict[str, Any]:
         query_lower = query.lower()
 
         # Route 1: Timetable inquiry
         if ("schedule" in query_lower or "timetable" in query_lower or "lecture" in query_lower) and "Tool Result" not in observation:
+            course_match = COURSE_CODE_IN_QUERY.search(query)
             return {
                 "action": "EXECUTE_TOOL",
                 "tool_name": "get_course_schedule",
                 "tool_params": {
-                    "course_code": "BSE4104",
-                    "student_id": "2300712345"
+                    "student_id": student_id,
+                    "course_code": course_match.group(0).upper() if course_match else None,
                 }
             }
 
@@ -214,11 +301,11 @@ CRITICAL RULES:
                 "action": "EXECUTE_TOOL",
                 "tool_name": "create_support_ticket",
                 "tool_params": {
-                    "student_id": "2300712345",
-                    "summary": query[:80],
+                    "student_id": student_id,
+                    "summary": self._ticket_summary(query),
                     "original_message": query,
-                    "category": "administrative",
-                    "priority": "medium",
+                    "category": TicketCategory.ADMINISTRATIVE.value,
+                    "priority": TicketPriority.MEDIUM.value,
                     "student_confirmed": True
                 }
             }
@@ -230,20 +317,24 @@ CRITICAL RULES:
         # Route 4: Final response synthesis
         return {"action": "FINAL_SYNTHESIS"}
 
-    def _dispatch_tool(self, tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    @staticmethod
+    def _lowercase_enum(value: Any) -> str:
+        return str(getattr(value, "value", value)).strip().lower()
+
+    def _dispatch_tool(self, tool_name: str, params: Dict[str, Any]) -> Any:
         try:
             if tool_name == "get_course_schedule":
                 return get_course_schedule(
-                    student_id=params.get("student_id", "2300712345"),
-                    course_code=params.get("course_code", "BSE4104")
+                    student_id=params.get("student_id", DEFAULT_STUDENT_ID),
+                    course_code=params.get("course_code")
                 )
             elif tool_name == "create_support_ticket":
                 return create_support_ticket(
-                    student_id=params.get("student_id", "2300712345"),
+                    student_id=params.get("student_id", DEFAULT_STUDENT_ID),
                     summary=params.get("summary", "Support ticket request"),
                     original_message=params.get("original_message", "Support ticket request"),
-                    category=params.get("category", "administrative"),
-                    priority=params.get("priority", "medium"),
+                    category=self._lowercase_enum(params.get("category", TicketCategory.ADMINISTRATIVE)),
+                    priority=self._lowercase_enum(params.get("priority", TicketPriority.MEDIUM)),
                     student_confirmed=params.get("student_confirmed", True)
                 )
         except Exception as e:
@@ -295,6 +386,14 @@ Synthesize a direct, grounded answer adhering to the system instructions.
                         for item in data
                     ]
                     return f"Here is your verified lecture timetable:\n\n" + "\n".join(entries)
+                if isinstance(data, list):
+                    return "I found no lectures matching your request in your timetable."
+                if isinstance(data, dict) and "error" in data:
+                    reason = str(data["error"]).rstrip(".")
+                    return (
+                        f"I could not complete that request: {reason}. "
+                        "Would you like me to submit a support ticket so a staff member can follow up?"
+                    )
                 if isinstance(data, dict) and "ticket_id" in data:
                     return f"Your support ticket **{data['ticket_id']}** has been registered with priority **{data.get('priority')}**. Our administrative desk will review it shortly."
             except Exception:
