@@ -1,69 +1,59 @@
-# WEEK 4 PROGRESS REPORT: Stateful Conversational Memory & Multi-Step Agent Orchestration
+# WEEK 4 PROGRESS REPORT: Tools, Bounded Function Calling & Orchestration
 
-**Course:** BSE4104 Emerging Trends in Software Engineering – Capstone Project  
-**Project:** AI-Native University Student Support Case Agent  
-**Delivery Timeline:** 21st September, 2026 – 25th September, 2026  
+**Course:** BSE4104 Emerging Trends In Software Engineering – Capstone Project
+**Project:** AI-Native University Student Support Case Agent
+**Delivery Timeline:** 21st September, 2026 – 25th September, 2026
+**Primary Focus:** Safe Tool Execution, Bounded Function Calling, Failure Handling & Session State
 **Group Name:** Group C Day
 
 ---
 
-## Team Members
+## Group Members
 
 | S/N | Name                   | Student Number | Registration Number |
 | :-: | :--------------------- | :------------: | :-----------------: |
-|  1  | Bantrobusa Kazibwe FZ  |   2300707416   |   23/U/07416/EVE    |
-|  2  | Baingana Abisha        |   2300707328   |    23/U/07328/PS    |
-|  3  | Mbasani Pauline Peace  |   2300700765   |      23/U/0765      |
-|  4  | Tendo Jemimah Nakayiwa |   2300717920   |    23/U/17920/PS    |
-|  5  | Tusiime Mable          |   2300701494   |      23/U/1494      |
+| 1.  | Bantrobusa Kazibwe FZ  |   2300707416   |   23/U/07416/EVE    |
+| 2.  | Baingana Abisha        |   2300707328   |    23/U/07328/PS    |
+| 3.  | Mbasani Pauline Peace  |   2300700765   |      23/U/0765      |
+| 4.  | Tendo Jemimah Nakayiwa |   2300717920   |    23/U/17920/PS    |
+| 5.  | Tusiime Mable          |   2300701494   |      23/U/1494      |
 
 ---
 
 ### 1. Overview & Core Deliverables
 
-Week 4 advanced the case agent into a stateful, autonomous multi-step orchestrator running a bounded **Sense $\rightarrow$ Plan $\rightarrow$ Act $\rightarrow$ Observe $\rightarrow$ Revise** loop. Core achievements include:
+During Week 4, the engineering focus progressed beyond open-ended generative answers to safe, bounded software capabilities via explicit tool invocation. The core deliverables achieved include:
 
-- **Sliding-Window Memory (`/src/agent/memory.py`):** Bounded FIFO retention (`window_size=6`), deterministic rolling summarization without LLM cost, active session registry (`_active_sessions.json`), and GDPR hard-purge/TTL deletion.
-- **Bounded ReAct Orchestrator (`/src/agent/orchestrator.py`):** Capped at 3 iterations to prevent runaway execution; enforces deterministic Iteration-0 safety refusals for grade/fee changes.
-- **Model Synthesis & Live RAG:** Integrated `gemini-3.5-flash-lite` for citation-grounded answers; honest retrieval failure handling without synthetic mocks.
-- **Runtime Telemetry (`/src/telemetry/tracker.py`):** Structured JSONL logging capturing token counts, context window percentage (>80% warning threshold), and decoupled model vs. tool latencies.
+- **Tool Catalogue & Schemas (`/src/schemas/tool_definitions.json`):** Strict JSON Schema specifications defining parameter types, mandatory fields, and return models.
+- **Deterministic Tool Implementations:** Deployed `timetable_tool.py` for read-only course schedule lookups and `ticket_tool.py` for simulated administrative case creation.
+- **Bounded ReAct Orchestrator (`/src/agent/orchestrator.py`):** Multi-step control loop running Sense $\rightarrow$ Plan $\rightarrow$ Act $\rightarrow$ Observe bounded by a strict 3-iteration cap.
+- **Updated System Architecture Diagram (`/docs/architecture/system_architecture.png`):** Multi-tier blueprint capturing the Iteration-0 safety guardrail, sliding memory, tool execution, and telemetry sinks.
+- **Failure & Authorization Suite (`/tests/agent/test_orchestrator.py`):** Verified sub-10ms rejection paths for prohibited intents and graceful recovery from missing tool parameters.
 
 ---
 
 ### 2. Team Contributions & Ownership Matrix
 
-| Team Member | Engineering Role | Key Deliverables & Ownership |
-| :--- | :--- | :--- |
-| **Baingana Abisha** | Backend Core & Agent Architecture | Implemented `SupportAgentOrchestrator`, runtime execution telemetry (`tracker.py`), and memory compatibility bridges. |
-| **Mbasani Pauline Peace** | AI Engineering & Retrieval Lead | Designed `SessionMemoryManager` with sliding-window FIFO eviction and maintained RAG grounding pipelines. |
-| **Bantrobusa Kazibwe FZ** | Tool Integration & Infrastructure | Validated 6-parameter schema compliance for `ticket_tool.py` and schedule lookups (`timetable_tool.py`). |
-| **Tendo Jemimah Nakayiwa** | Quality Assurance & E2E Testing | Executed verification suites for multi-turn retention, FIFO summary pruning, and grade-change guardrails. |
-| **Tusiime Mable** | System Documentation & Governance | Enforced data layer git hygiene (`.gitignore`), telemetry audit rules, and compiled Week 4 reporting. |
+| Team Member                | Engineering Role                        | Key Week 4 Deliverables & Ownership                                                                                                                                                                                        |
+| :------------------------- | :-------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Baingana Abisha**        | Backend Core & System Architecture Lead | Engineered`SupportAgentOrchestrator` (`orchestrator.py`), designed the updated system architecture diagram (`system_architecture.png`), enforced `.gitignore` data layer hygiene, and authored the Week 4 progress report. |
+| **Mbasani Pauline Peace**  | AI Engineering & Retrieval Lead         | Authored strict tool schemas (`tool_definitions.json`), RAG retriever grounding bridges, and the 6-turn sliding memory manager (`memory.py`).                                                                              |
+| **Bantrobusa Kazibwe FZ**  | Tool Integration & Infrastructure       | Built 6-parameter validation handlers for`ticket_tool.py` and schedule lookups in `timetable_tool.py`.                                                                                                                     |
+| **Tendo Jemimah Nakayiwa** | Quality Assurance & E2E Testing         | Executed verification suites for missing tool parameters, enum schema violations, and grade-tampering refusals (`test_orchestrator.py`).                                                                                   |
+| **Tusiime Mable**          | DevOps & Infrastructure Lead            | Built runtime telemetry logging (`/src/utils/telemetry.py`) tracking decoupled model vs. tool latencies, per-turn token burn rates, and context overflow risks.                                                            |
 
 ---
 
-### 3. Key Decisions & Architectural Governance
+### 3. Technical Governance & Failure Handling
 
-- **Deterministic Memory Pruning:** A fixed 6-turn sliding window evicts older turns into an 18-word rolling summary deterministically without speculative LLM calls, eliminating prompt inflation.
-- **Safety Boundary Refusals:** Deterministic checks intercept administrative overrides (e.g., grade edits) in sub-10ms with 0 token leakage before LLM planning.
-- **GDPR & Storage Hygiene:** Built-in `delete_session()` and 30-day TTL purges protect student privacy; session files and JSONL telemetry logs are excluded from git.
-- **Resource Containment:** Strict 3-iteration loop ceiling and token utilization monitoring prevent denial-of-wallet and infinite looping states.
-
----
-
-### 4. Challenges & Mitigation Strategies
-
-- **Schema Deserialization Failure:** Legacy transcripts threw `KeyError: 'created_at'`.  
-  *Mitigation:* Added defensive `.get()` fallbacks and automatic index assignment inside `SessionState.from_dict` and `Message.from_dict`.
-- **Ticket Parameter Mismatch:** Orchestrator calls failed against strict `ticket_tool.py` definitions.  
-  *Mitigation:* Hardened planner to supply all 6 expected parameters with lowercase enum validation.
-- **Branch Merge Conflicts:** Divergent memory implementations collided in `memory.py`.  
-  *Mitigation:* Unified implementations into `SessionMemoryManager` with backward-compatible bridge methods.
+- **Deterministic Fast-Fail Guardrails:** Intercepts prohibited actions (grade or fee changes) at Iteration 0 in $<10\text{ms}$ with zero token leakage prior to model invocation.
+- **Side-Effect Confirmation Gates:** Writing to the case repository (`tickets.json`) requires explicit verification (`student_confirmed: bool`). Missing arguments return structured error dictionaries to the orchestrator rather than crashing.
+- **Memory & Telemetry Guardrails:** A 6-turn FIFO sliding window evicts older dialogue into an 18-word deterministic rolling summary without speculative LLM calls. Telemetry tracks token saturation against the 1M ceiling, warning at $\ge 80\%$.
 
 ---
 
-### 5. Next Steps (Week 5 Plans)
+### 4. Next Steps (Week 5 Plans)
 
-1. Wrap the agent orchestrator inside a production asynchronous FastAPI service.
-2. Build front-end UI views for ticket review and interaction history.
-3. Conduct adversarial red-teaming evaluations (prompt injections and jailbreak tests).
+1. Author the **Agent Task Contract** defining input requirements, state representation, iteration limits, and human escalation conditions.
+2. Implement goal-directed multi-step re-planning (`Sense -> Plan -> Act -> Observe -> Stop/Re-plan`).
+3. Capture three empirical execution traces (successful workflow, tool error recovery, and human hand-off stop condition).
