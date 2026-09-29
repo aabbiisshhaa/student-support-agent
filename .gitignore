@@ -1,3 +1,14 @@
 .env
-.venv
-data/*
+.venv/
+__pycache__/
+*.py[cod]
+*.db
+
+# Vector store build artifacts
+data/vector_store/*
+
+logs/
+
+# Telemetry logs and test sessions
+data/sessions/
+data/telemetry/

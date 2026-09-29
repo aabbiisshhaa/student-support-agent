@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Student Support Agent Tool Definitions",
+  "version": "1.0.0",
+  "tools": [
+    {
+      "type": "function",
+      "name": "get_course_schedule",
+      "description": "Retrieves the authenticated student's current course schedule from the timetable database. This tool is read-only and must never generate or change timetable information.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "student_id": {
+            "type": "string",
+            "description": "The authenticated student's university identifier.",
+            "minLength": 3,
+            "maxLength": 30,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9/_-]{2,29}$"
+          },
+          "course_code": {
+            "type": "string",
+            "description": "An optional course code used to filter the student's schedule.",
+            "minLength": 2,
+            "maxLength": 20,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 -]{1,19}$"
+          },
+          "day": {
+            "type": "string",
+            "description": "An optional day used to filter the student's schedule.",
+            "enum": [
+              "monday",
+              "tuesday",
+              "wednesday",
+              "thursday",
+              "friday",
+              "saturday",
+              "sunday"
+            ]
+          }
+        },
+        "required": [
+          "student_id"
+        ]
+      }
+    },
+    {
+      "type": "function",
+      "name": "create_support_ticket",
+      "description": "Creates a support ticket only after the authenticated student has confirmed the drafted ticket. Ticket ID generation, routing and storage are performed by deterministic application code.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "student_id": {
+            "type": "string",
+            "description": "The authenticated student's university identifier.",
+            "minLength": 3,
+            "maxLength": 30,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9/_-]{2,29}$"
+          },
+          "case_id": {
+            "type": "string",
+            "description": "The existing case identifier. Omit this field when creating a ticket for a new case.",
+            "minLength": 3,
+            "maxLength": 50,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{2,49}$"
+          },
+          "summary": {
+            "type": "string",
+            "description": "A short factual summary that does not add or change information from the student's message.",
+            "minLength": 10,
+            "maxLength": 500
+          },
+          "original_message": {
+            "type": "string",
+            "description": "The student's original support message.",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "category": {
+            "type": "string",
+            "description": "The fixed category used by deterministic code to select the appropriate support queue.",
+            "enum": [
+              "timetable",
+              "policy",
+              "administrative",
+              "other"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "description": "The suggested priority of the support request.",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ]
+          },
+          "student_confirmed": {
+            "type": "boolean",
+            "description": "Must be true only after the student explicitly confirms submission.",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "required": [
+          "student_id",
+          "summary",
+          "original_message",
+          "category",
+          "priority",
+          "student_confirmed"
+        ]
+      }
+    }
+  ]
+}

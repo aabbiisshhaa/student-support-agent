@@ -1,0 +1,55 @@
+
+## 1. University Accounts
+
+
+Every admitted student is issued two credentials:
+
+- A Student Portal account, with the student number as the username. The Portal is used for registration, course selection, results, fees statements and the Examination Permit.
+
+- A University email account in the form firstname.lastname@students.nakawa.ac.ug. This is the only address to which the University sends official communication. Accounts are created within five working days of the payment of the first instalment. The initial Portal password is the student's date of birth in the format DDMMYYYY and must be changed at first login.
+
+
+## 2. Password Reset
+
+
+A student who has forgotten a Portal password uses the Forgot Password link on the Portal login page. A reset link is sent to the University email address and is valid for thirty minutes. A student who cannot access the University email account presents in person at the ICT Help Desk with a University Identity Card, or emails ithelp@nakawa.ac.ug from a previously registered alternative address. Password resets are not performed over the telephone and are not performed on the basis of a request from a third party.
+
+
+## 3. Portal Availability and Maintenance
+
+
+The Student Portal is available twenty-four hours a day except during scheduled maintenance, which takes place on the first Sunday of each month between 02:00 and 06:00 East Africa Time. Maintenance is not scheduled during a registration period, an add/drop period or an examination period. Where emergency maintenance is unavoidable during those periods, the Directorate publishes a notice on the Portal login page and extends any affected deadline by the duration of the outage.
+
+
+## 4. Common Portal Problems
+
+
+Course not appearing in the selection list. The course is not offered to the student's programme and year, or the student has not been cleared by Finance. The student contacts the Head of Department in the first case and the Finance Help Desk in the second. Registration button disabled. The first instalment has not been recognised, or the biometric confirmation step has not been completed. The student checks the fees statement first, then attends the Faculty Registrar for biometrics. Examination Permit will not generate. The Permit generates only where the student is registered, has met attendance, and has no outstanding balance. The Portal displays the specific failing condition beneath the Generate button. Results not visible. Results marked WH are withheld for fees. Results marked UR are withheld pending a disciplinary matter. Results that are simply absent have not yet been submitted by the department.
+
+
+## 5. Acceptable Use
+
+
+University ICT facilities are provided for academic purposes. The following are prohibited and are disciplinary offences under the Student Regulations:
+
+- Sharing account credentials with any other person.
+
+- Accessing or attempting to access another person's account.
+
+- Circumventing network controls, including the use of unauthorised proxies to bypass filtering.
+
+- Using University facilities to store or distribute material that infringes copyright.
+
+- Sending bulk unsolicited messages from a University account. The Directorate logs authentication events and network flows and retains those logs for one hundred and eighty days. Logs are disclosed to the Dean of Students only on a written request in connection with a disciplinary investigation.
+
+
+## 6. Support Channels and Response Times
+
+
+| Channel | Hours | Target first response | |---|---|---| | ICT Help Desk, Block C Room 12 | Monday to Friday, 08:30 - 17:00 | Immediate | | ithelp@nakawa.ac.ug | Monitored Monday to Friday | 1 working day | | Portal support ticket | 24 hours | 2 working days | A ticket that concerns an imminent deadline, for example a registration or Examination Permit problem within forty-eight hours of a deadline, is marked urgent by the student and is targeted for a response within four working hours.
+
+
+## 7. Devices and Network Access
+
+
+Eduroam is available across the campus. Students authenticate with the full University email address and the Portal password. A student may register up to three devices. Registration of a fourth device automatically deregisters the least recently used device.
