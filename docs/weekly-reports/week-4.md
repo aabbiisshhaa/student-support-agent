@@ -1,4 +1,4 @@
-# WEEK 4 PROGRESS REPORT: Stateful Conversational Memory & Agent Orchestration
+# WEEK 4 PROGRESS REPORT: Stateful Conversational Memory & Multi-Step Agent Orchestration
 
 **Course:** BSE4104 Emerging Trends in Software Engineering – Capstone Project  
 **Project:** AI-Native University Student Support Case Agent  
@@ -19,56 +19,51 @@
 
 ---
 
-### 1. Overview
+### 1. Overview & Core Deliverables
 
-During Week 4, the team advanced the Student Support Case Agent from isolated tools and retrieval functions into a unified, autonomous, multi-step orchestrator driven by the Sense $\rightarrow$ Plan $\rightarrow$ Act $\rightarrow$ Observe $\rightarrow$ Revise control loop. We integrated live model generation with `gemini-3.5-flash-lite`, deployed a deterministic sliding-window session memory manager with rolling summaries and GDPR deletion routines, instrumented real-time execution telemetry and token usage tracking, and enforced deterministic iteration-0 safety refusals against unauthorized administrative actions.
+Week 4 advanced the case agent into a stateful, autonomous multi-step orchestrator running a bounded **Sense $\rightarrow$ Plan $\rightarrow$ Act $\rightarrow$ Observe $\rightarrow$ Revise** loop. Core achievements include:
 
----
-
-### 2. Deliverables Completed
-
-| Deliverable                               | GitHub Artifact Location            | Evidence Category | AI Safety Impact        | Status   |
-| :---------------------------------------- | :---------------------------------- | :---------------- | :---------------------- | :------- |
-| **Multi-Step Agent Orchestrator**         | `/src/agent/orchestrator.py`        | Working Code      | AI Assisted             | Complete |
-| **Stateful Memory & GDPR Persistence**    | `/src/agent/memory.py`              | Working Code      | Deterministic Code      | Complete |
-| **Execution Telemetry & Token Tracker**   | `/src/telemetry/tracker.py`         | Working Code      | Deterministic Code      | Complete |
-| **Deterministic Hard Guardrail Refusals** | `/src/agent/orchestrator.py`        | Working Code      | Deterministic Code      | Complete |
-| **Multi-Turn Integration Test Suite**     | `/tests/agent/test_orchestrator.py` | Test Suite        | Human Approval Required | Complete |
+- **Sliding-Window Memory (`/src/agent/memory.py`):** Bounded FIFO retention (`window_size=6`), deterministic rolling summarization without LLM cost, active session registry (`_active_sessions.json`), and GDPR hard-purge/TTL deletion.
+- **Bounded ReAct Orchestrator (`/src/agent/orchestrator.py`):** Capped at 3 iterations to prevent runaway execution; enforces deterministic Iteration-0 safety refusals for grade/fee changes.
+- **Model Synthesis & Live RAG:** Integrated `gemini-3.5-flash-lite` for citation-grounded answers; honest retrieval failure handling without synthetic mocks.
+- **Runtime Telemetry (`/src/telemetry/tracker.py`):** Structured JSONL logging capturing token counts, context window percentage (>80% warning threshold), and decoupled model vs. tool latencies.
 
 ---
 
-### 3. Individual Contributions & Role Alignment
+### 2. Team Contributions & Ownership Matrix
 
-- **AI Engineering Lead:** Integrated `GeminiModel` (`gemini-3.5-flash-lite`) into the orchestrator loop, built honest RAG error handling removing synthetic mocks, and standardized grounded response synthesis with bracketed citations.
-- **Application / Integration Lead:** Built the `TelemetryTracker` (`/src/telemetry/tracker.py`) module, instrumenting per-turn model vs. tool latencies, token consumption counters, and context-window threshold monitoring.
-- **DevOps / Documentation Lead:** Standardized parameter signatures across tool dispatches (specifically enforcing 6-parameter lowercase enum schemas on `/src/tools/ticket_tool.py`), maintaining Git hygiene by ignoring session and telemetry runtime logs.
-- **Quality / Security Lead:** Engineered deterministic sliding-window FIFO memory pruning and rolling summary folding (`/src/agent/memory.py`), adding GDPR session purges and active session registry tracking (`_active_sessions.json`).
-- **Project / Requirements Lead:** Coordinated ClickUp sprint board deliverables, conducted safety boundary audits to guarantee sub-10ms iteration-0 refusals for academic grade modifications, and compiled the Week 4 progress documentation.
-
----
-
-### 4. Key Engineering Decisions & Evaluation
-
-- **Autonomous ReAct Control Loop:** Configured an iterative execution loop capped at `max_iterations = 3`. This enforces deterministic termination and prevents runaway token billing or unbounded multi-step execution cycles.
-- **Deterministic Memory Pruning vs. LLM Summarization:** Conversation context retention is strictly bounded by a FIFO sliding window (`window_size = 6`). Evicted turns are folded into a rule-based rolling summary using deterministic string extraction (first sentence or 18 words) without making speculative LLM calls, guaranteeing repeatable prompt assembly.
-- **Data Protection & Compliance:** Integrated `delete_session()` for immediate hard-purging of student conversation records from disk and memory, complemented by `cleanup_expired_sessions()` enforcing a 30-day institutional time-to-live (TTL) limit.
-- **Runtime Observability:** Every turn logs an append-only entry to `data/telemetry/agent_telemetry.jsonl`. Monitored token utilization against the 1,000,000 token context window ceiling, automatically flagging an `overflow_warning` whenever memory utilization exceeds 80%.
+| Team Member | Engineering Role | Key Deliverables & Ownership |
+| :--- | :--- | :--- |
+| **Baingana Abisha** | Backend Core & Agent Architecture | Implemented `SupportAgentOrchestrator`, runtime execution telemetry (`tracker.py`), and memory compatibility bridges. |
+| **Mbasani Pauline Peace** | AI Engineering & Retrieval Lead | Designed `SessionMemoryManager` with sliding-window FIFO eviction and maintained RAG grounding pipelines. |
+| **Bantrobusa Kazibwe FZ** | Tool Integration & Infrastructure | Validated 6-parameter schema compliance for `ticket_tool.py` and schedule lookups (`timetable_tool.py`). |
+| **Tendo Jemimah Nakayiwa** | Quality Assurance & E2E Testing | Executed verification suites for multi-turn retention, FIFO summary pruning, and grade-change guardrails. |
+| **Tusiime Mable** | System Documentation & Governance | Enforced data layer git hygiene (`.gitignore`), telemetry audit rules, and compiled Week 4 reporting. |
 
 ---
 
-### 5. Challenges & Mitigation Strategies
+### 3. Key Decisions & Architectural Governance
 
-- **Challenge:** The orchestrator crashed with a `KeyError: 'created_at'` when reading persisted legacy sessions saved under older, differing dictionary schemas.
-  - _Mitigation:_ Implemented defensive deserialization within `SessionState.from_dict` and `Message.from_dict`, safely falling back to metadata sub-dictionaries, auto-assigning turn indexes, and supplying ISO-8601 timestamps.
-- **Challenge:** Support ticket creation failed dynamically during integration testing due to casing and parameter mismatches between orchestrator dispatches and the strict tool schema.
-  - _Mitigation:_ Hardened the orchestrator planning layer to strictly pass all 6 expected parameters (`student_id`, `summary`, `original_message`, `category`, `priority`, `student_confirmed`) using validated lowercase enum constraints.
-- **Challenge:** Branch merge conflict between independent memory implementations (`SessionMemoryManager` with active registries vs. `ConversationMemory` orchestrator calls).
-  - _Mitigation:_ Unified both into `src/agent/memory.py` by adding compatibility bridges (`initialize_session`, `get_recent_history`) and GDPR purge methods directly onto the core sliding-window class, preserving both teammates' contributions.
+- **Deterministic Memory Pruning:** A fixed 6-turn sliding window evicts older turns into an 18-word rolling summary deterministically without speculative LLM calls, eliminating prompt inflation.
+- **Safety Boundary Refusals:** Deterministic checks intercept administrative overrides (e.g., grade edits) in sub-10ms with 0 token leakage before LLM planning.
+- **GDPR & Storage Hygiene:** Built-in `delete_session()` and 30-day TTL purges protect student privacy; session files and JSONL telemetry logs are excluded from git.
+- **Resource Containment:** Strict 3-iteration loop ceiling and token utilization monitoring prevent denial-of-wallet and infinite looping states.
 
 ---
 
-### 6. Next Steps (Week 5 Plans)
+### 4. Challenges & Mitigation Strategies
 
-1. Package the agent orchestrator behind a production FastAPI asynchronous backend service.
-2. Develop front-end case management UI views for student ticket escalation workflows.
-3. Conduct adversarial red-teaming evaluations on prompt injection and prompt leak vulnerabilities.
+- **Schema Deserialization Failure:** Legacy transcripts threw `KeyError: 'created_at'`.  
+  *Mitigation:* Added defensive `.get()` fallbacks and automatic index assignment inside `SessionState.from_dict` and `Message.from_dict`.
+- **Ticket Parameter Mismatch:** Orchestrator calls failed against strict `ticket_tool.py` definitions.  
+  *Mitigation:* Hardened planner to supply all 6 expected parameters with lowercase enum validation.
+- **Branch Merge Conflicts:** Divergent memory implementations collided in `memory.py`.  
+  *Mitigation:* Unified implementations into `SessionMemoryManager` with backward-compatible bridge methods.
+
+---
+
+### 5. Next Steps (Week 5 Plans)
+
+1. Wrap the agent orchestrator inside a production asynchronous FastAPI service.
+2. Build front-end UI views for ticket review and interaction history.
+3. Conduct adversarial red-teaming evaluations (prompt injections and jailbreak tests).
