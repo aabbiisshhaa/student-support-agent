@@ -1,14 +1,28 @@
+# Environment Secrets & Local Config
 .env
+.env.local
+*.env
+
+# Python Caches & Build Artifacts
+env/
 .venv/
 __pycache__/
 *.py[cod]
+*$py.class
+.pytest_cache/
 *.db
-
-# Vector store build artifacts
-data/vector_store/*
-
 logs/
+.coverage
+htmlcov/
 
-# Telemetry logs and test sessions
-data/sessions/
-data/telemetry/
+# # Runtime Session Transcripts (GDPR Compliance & Student Privacy)
+data/sessions/*.json
+!data/sessions/*.gitkeep
+
+# Runtime Telemetry & Observability Logs
+data/telemetry/*.jsonl
+!data/telemetry/.gitkeep
+
+# Derived Vector Store & ChromaDB Artifacts
+data/vector_store/
+!data/vector_store/.gitkeep
