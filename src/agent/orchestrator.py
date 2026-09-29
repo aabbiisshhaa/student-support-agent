@@ -223,6 +223,7 @@ CRITICAL RULES:
                     history=session_history,
                     context=context_snippets,
                     observation=observation,
+                    session_id=session_id,
                 )
                 m_latency = (time.time() - m_start) * 1000
                 self.memory.add_turn(session_id, "assistant", final_answer)
@@ -296,7 +297,27 @@ CRITICAL RULES:
             }
 
         # Route 2: Support ticket creation (strict 6-argument schema & lowercase enums)
-        if ("ticket" in query_lower or "escalate" in query_lower or "lodge" in query_lower or "complaint" in query_lower) and "Tool Result" not in observation:
+        explicit_ticket_request = (
+            (
+                "ticket" in query_lower
+                and any(
+                    verb in query_lower
+                    for verb in (
+                        "create",
+                        "open",
+                        "submit",
+                        "raise",
+                    )
+                )
+            )
+            or "escalate" in query_lower
+            or "lodge" in query_lower
+        )
+
+        if (
+            explicit_ticket_request
+            and "Tool Result" not in observation
+        ):
             return {
                 "action": "EXECUTE_TOOL",
                 "tool_name": "create_support_ticket",
@@ -348,7 +369,8 @@ CRITICAL RULES:
         user_query: str,
         history: List[Dict[str, Any]],
         context: List[Dict[str, Any]],
-        observation: str
+        observation: str,
+        session_id: str,
     ) -> str:
         # Synthesizes the response using live GeminiModel when available, or formatted fallback."""
         if self.has_live_model:
@@ -368,7 +390,8 @@ Synthesize a direct, grounded answer adhering to the system instructions.
                 response_text = self.model.generate_response(
                     user_message=user_prompt,
                     system_prompt=self.SYSTEM_PROMPT,
-                    max_tokens=400
+                    max_tokens=400,
+                    session_id=session_id,
                 )
                 if response_text and response_text.strip():
                     return response_text.strip()
