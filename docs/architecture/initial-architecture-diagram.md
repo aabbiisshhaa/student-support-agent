@@ -1,4 +1,4 @@
-# System Architecture Diagram
+# Initial System Architecture Diagram
 
 **System:** AI-Native University Student-Support Case Agent  
 **Module:** System Architecture & Data Flow
@@ -7,7 +7,7 @@
 
 ## High-Level System Architecture
 
-![Initial Architecture Diagram](./Initial%20architecture%20diagram.drawio.png)
+![Initial Architecture Diagram](./Initial%20architecture%20diagram.png)
 
 ---
 
