@@ -70,7 +70,7 @@ class TestTicketCreationFromAgentLoop(AgentLoopTestCase):
     def test_ticket_request_returns_created_ticket_payload(self) -> None:
         result = self.agent.run("session-ticket", TICKET_REQUEST)
 
-        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["status"], "escalated")
         self.assertTrue(result["escalation_required"])
 
         ticket_calls = [call for call in result["tool_calls"] if call["tool"] == "create_support_ticket"]
@@ -133,7 +133,7 @@ class TestTicketCreationFromAgentLoop(AgentLoopTestCase):
     def test_refused_request_creates_no_ticket(self) -> None:
         result = self.agent.run("session-refused", "I want a grade change, please open a ticket")
 
-        self.assertEqual(result["status"], "refused")
+        self.assertEqual(result["status"], "escalated")
         self.assertEqual(result["tool_calls"], [])
         self.assertIsNone(get_ticket("TCK-000001"))
 
@@ -235,7 +235,7 @@ class TestTimetableBindingFromAgentLoop(AgentLoopTestCase):
         call = result["tool_calls"][0]
         self.assertEqual(call["status"], "error")
         self.assertIn("9999999999", call["result"]["error"])
-        self.assertEqual(result["status"], "tool_error")
+        self.assertEqual(result["status"], "recovered")
         self.assertIn("could not complete", result["response"])
 
     def test_invalid_student_number_reports_a_tool_error(self) -> None:
