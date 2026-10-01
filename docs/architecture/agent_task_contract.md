@@ -25,7 +25,7 @@ Anything this contract does not explicitly allow is **forbidden**. The rules her
 
 ### Why this task needs a multi-step agent
 
-A student with a failed course (grade **F**) must retake it "the next time the course is offered" ([Academic Handbook §7]). That retake slot can clash with the student's current courses. Answering "Can I retake CSC3103 and will it clash with my timetable?" requires several dependent steps:
+A student with a failed course (grade **F**) must retake it "the next time the course is offered" [Nakawa University Academic Handbook 2025/2026, s. 7 (Retakes and Progression), p. 4]. That retake slot can clash with the student's current courses. Answering "Can I retake CSC3103 and will it clash with my timetable?" requires several dependent steps:
 
 1. Retrieve the retake policy so the answer is grounded.
 2. Read the student's current timetable.
@@ -47,7 +47,7 @@ A run reaches `success` only when **all** of the following are true:
 
 | # | Criterion | Checked by |
 |---|---|---|
-| G1 | At least one retake-policy passage was retrieved, and the response cites it, e.g. `[Academic Handbook §7]`. | Orchestrator: `context_snippets` is not empty |
+| G1 | At least one retake-policy passage was retrieved, and the response cites it in the corpus citation format, e.g. `[Nakawa University Academic Handbook 2025/2026, s. 7 (Retakes and Progression), p. 4]`. | Orchestrator: `context_snippets` is not empty |
 | G2 | The student's current timetable was read successfully by `get_course_schedule`. | `tool_observations` entry with `status == "ok"` |
 | G3 | The retake course's sessions were read successfully. | `tool_observations` entry with `status == "ok"` |
 | G4 | Conflicts were calculated by the deterministic overlap function, not by the model. | `detect_schedule_conflicts` output stored in state |
@@ -76,8 +76,8 @@ The workflow does not start until every **required** input passes deterministic 
 | Input | Required | Source | Validation rule (deterministic) | On failure |
 |---|---|---|---|---|
 | `session_id` | Yes | Session manager (`src/agent/memory.py`) | Must exist or be created by `SessionMemoryManager.initialize_session` | Reject the run |
-| `student_id` | Yes | **Authenticated session only**, never from free text in the message | `^[A-Za-z0-9][A-Za-z0-9/_-]{2,29}$` (same pattern as `tool_definitions.json`) | Reject the run. No tool is called |
-| `user_query` | Yes | Student message | 1–2000 characters after trimming. Prohibited-intent screen runs **before** iteration 1 | Prohibited intent → `escalated` at iteration 0 |
+| `student_id` | Yes | The session's bound `student_ref` (set and checked by `open_session` in `src/app.py`, which rejects a session that belongs to another student). Never taken from free text in the message | `^[A-Za-z0-9][A-Za-z0-9/_-]{2,29}$` (same pattern as `tool_definitions.json`) | Reject the run. No tool is called |
+| `user_query` | Yes | Student message | 1–2000 characters after trimming (same limit as `original_message` in `tool_definitions.json`; **to be added**, as no length check exists in `orchestrator.py` yet). Prohibited-intent screen runs **before** iteration 1 | Prohibited intent → `escalated` at iteration 0 |
 | `retake_course_code` | Yes | Extracted from `user_query`, or from recent session history if missing | `\b[A-Za-z]{3}\d{4}\b`, stored in upper case | Ask the student **once**. If still missing → escalate (S6) |
 | `target_semester` | No | Student message, otherwise the current semester from the Academic Calendar | One of `"I"`, `"II"`, `"recess"` | Default to the current semester and state this assumption in the response |
 | `student_confirmed` | Only for a ticket | Explicit "yes" from the student after seeing the draft ticket | Must be literally `true` (schema `enum: [true]`) | Ticket is **not** created; the run ends `escalated` with "awaiting confirmation" |
@@ -104,7 +104,7 @@ The agent may only call tools listed in this table. The orchestrator's `_dispatc
 ### 4.1 Tool rules
 
 - **R-T1 Read before write.** T5 is the only tool with side effects, and it can only be called as the final action of a run.
-- **R-T2 Schema first.** Every tool argument is validated against `src/schemas/tool_definitions.json` (or the matching validator in the tool module) **before** execution. Invalid arguments are a failed step; they are never "fixed" by the model.
+- **R-T2 Schema first.** Every tool argument is validated **before** execution by the validators inside each tool module (`_validate_student_id`, `_validate_course_code`, `_validate_summary`, etc.), which use the same patterns and limits as `src/schemas/tool_definitions.json`. New tools (T3) must follow the same pattern. Invalid arguments are a failed step; they are never "fixed" by the model.
 - **R-T3 No model-computed facts.** Clash detection (T4), ticket IDs, queue routing and dates are always computed by code. The model only phrases the result.
 - **R-T4 Category for T5.** Retake and clash tickets use `category = "timetable"` (Timetable & Registration Queue). Retake-attempt and discontinuation risk cases use `category = "policy"` and `priority = "high"`.
 - **R-T5 One call per tool per plan step.** A tool may be retried **at most once** after a failure (see Section 6).
@@ -210,17 +210,17 @@ These checks are deterministic and run in **SENSE** (before any tool call) and i
 
 | ID | Trigger (deterministic) | Final status | Hand-off target | Ticket |
 |---|---|---|---|---|
-| S1 | **Prohibited intent** in the query (grade change, fee waiver, retake-fee waiver, record change, disciplinary appeal, etc.) using `PROHIBITED_INTENTS` | `escalated` at **iteration 0**, no tool calls | Department administrator | Offered, needs confirmation |
-| S2 | **Clash with no clash-free option** and the student asks what to do | `escalated` | Faculty Registrar / Head of Department (academic decision) | Drafted with `category="timetable"`, needs confirmation |
-| S3 | **Discontinuation risk:** the student says this would be their 4th attempt at the course (policy limits retakes to 3, [Academic Handbook §7]) | `escalated` | Academic Registrar | Drafted with `category="policy"`, `priority="high"` |
-| S4 | **Iteration limit reached** (`iteration_count == 5`) without a terminal status | `escalated` | General Support Queue | Offered |
-| S5 | **Same tool failed twice** (after the one allowed retry), or `StudentNotFoundError` | `escalated` | Timetable & Registration Queue | Offered |
-| S6 | **Missing or invalid course code** after one clarification question | `escalated` | Timetable & Registration Queue | Offered |
-| S7 | **No policy evidence found** for the retake question (empty retrieval twice) | `escalated` | Academic Policy Queue | Offered. The agent states it "cannot confirm this from official records" |
-| S8 | **Withdrawal or administrative-error clash claim**, e.g. "the University put two of my courses at the same time". This needs Form AR/7 and a Faculty Board decision | `escalated` | Faculty Board via Faculty Registrar | Drafted with `category="timetable"` |
-| S9 | **Outside the retake registration window** published in the Academic Calendar | `escalated` | Academic Registrar | Offered |
-| S10 | **Distress or urgency cues** (e.g. "I will be discontinued", "I am desperate") using the deterministic keyword list from Boundary Matrix row 6 | `escalated` | Student Support Services | Offered |
-| S11 | **Unknown planner action** or an unregistered tool requested twice | `escalated` | General Support Queue | Offered |
+| S1 | **Prohibited intent** in the query, matched against `SupportAgentOrchestrator.PROHIBITED_INTENTS` (e.g. "change my grade", "fee waiver", "tuition refund", "modify academic records", "disciplinary appeal"). The current list does not catch retake-specific wording such as "waive my retake fee" or "reset my retake attempts"; these phrases **must be added** when the workflow is implemented | `escalated` at **iteration 0**, no tool calls | Department administrator (`HARD_REFUSAL_MESSAGE`) → General Administration Queue | Offered, `category="administrative"` |
+| S2 | **Clash with no clash-free option** and the student asks what to do | `escalated` | Timetable & Registration Queue, for the Faculty Registrar / Head of Department to decide | Drafted with `category="timetable"`, needs confirmation |
+| S3 | **Discontinuation risk:** the student says this would be their 4th attempt at the course (policy limits retakes to 3, [Nakawa University Academic Handbook 2025/2026, s. 7 (Retakes and Progression), p. 4]) | `escalated` | Academic Policy Queue | Drafted with `category="policy"`, `priority="high"` |
+| S4 | **Iteration limit reached** (`iteration_count == 5`) without a terminal status | `escalated` | General Administration Queue | Offered, `category="administrative"` |
+| S5 | **Same tool failed twice** (after the one allowed retry), or `StudentNotFoundError` | `escalated` | Timetable & Registration Queue | Offered, `category="timetable"` |
+| S6 | **Missing or invalid course code** after one clarification question | `escalated` | Timetable & Registration Queue | Offered, `category="timetable"` |
+| S7 | **No policy evidence found** for the retake question (empty retrieval twice) | `escalated` | Academic Policy Queue | Offered, `category="policy"`. The agent states it "cannot confirm this from official records" |
+| S8 | **Withdrawal or administrative-error clash claim**, e.g. "the University put two of my courses at the same time". This needs Form AR/7 and a Faculty Board decision | `escalated` | Timetable & Registration Queue, for a Faculty Board decision on Form AR/7 | Drafted with `category="timetable"` |
+| S9 | **Outside the retake registration window** published in the Academic Calendar | `escalated` | Timetable & Registration Queue | Offered, `category="timetable"` |
+| S10 | **Distress or urgency cues** (e.g. "I will be discontinued", "I am desperate") matched against a fixed keyword list, as required by Boundary Matrix row 6. **This list does not exist in the code yet and must be added** | `escalated` | General Support Queue, flagged for Student Support Services | Offered, `category="other"`, `priority="high"` |
+| S11 | **Unknown planner action** or an unregistered tool requested twice | `escalated` | General Administration Queue | Offered, `category="administrative"` |
 
 ### 7.3 Hand-off rules
 
@@ -265,7 +265,7 @@ Every run returns the existing orchestrator result shape, plus the workflow fiel
 | A: Happy path, no clash | SENSE → RETRIEVE (T1) → T2 → T3 → T4 in Observe → SYNTHESIS | 4 | `success` |
 | B: Recovery | SENSE → T1 → T2 **fails** → REPLAN (retry T2) → T2 ok → T3 → SYNTHESIS | 5 | `recovered` |
 | C: Clash needing an academic decision | SENSE → T1 → T2 → T3 → T4 finds a clash → student asks which to drop → S2 → draft ticket | 4 | `escalated` |
-| D: Prohibited request | SENSE: "waive my retake fee" → S1 | 0 | `escalated` |
+| D: Prohibited request | SENSE: "I want a fee waiver for my retake" → S1 | 0 | `escalated` |
 
 These traces are the acceptance tests for the Week 5 "three execution traces" deliverable. Trace B is the required failure-and-recovery case.
 
@@ -295,3 +295,4 @@ This contract is versioned with the code. Any change to the goal, tool list, lim
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-10-01 | First contract for the Course Retake & Timetable Conflict Resolution workflow |
+| 1.1 | 2026-10-01 | Aligned with existing code: real citation format, ticket queues from `CATEGORY_QUEUES`, session-bound `student_id`, tool-module validators; marked missing pieces (retake prohibited phrases, distress keywords, input length check) as to be added |
