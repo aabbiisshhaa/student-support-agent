@@ -80,7 +80,6 @@ class PlanAction(str, Enum):
     RETRIEVE_KNOWLEDGE = "RETRIEVE_KNOWLEDGE"
     EXECUTE_TOOL = "EXECUTE_TOOL"
     FINAL_SYNTHESIS = "FINAL_SYNTHESIS"
-    ESCALATE = "ESCALATE"
 
 
 ALLOWED_STEP_TRANSITIONS: Mapping[AgentStep, frozenset[AgentStep]] = MappingProxyType(
