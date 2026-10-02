@@ -94,16 +94,25 @@ class TestTicketCreationFromAgentLoop(AgentLoopTestCase):
         self.assertEqual(get_ticket(ticket["ticket_id"]), ticket)
 
     def test_ticket_tool_is_called_with_the_six_required_arguments(self) -> None:
-        with patch("src.agent.orchestrator.create_support_ticket", wraps=create_support_ticket) as tool:
+        from src.agent import orchestrator as orchestrator_module
+
+        with patch.object(
+            orchestrator_module.tool_registry,
+            "execute",
+            wraps=orchestrator_module.tool_registry.execute,
+        ) as execute:
             self.agent.run("session-ticket", TICKET_REQUEST)
 
-        tool.assert_called_once_with(
-            student_id=DEFAULT_STUDENT_ID,
-            summary=TICKET_REQUEST,
-            original_message=TICKET_REQUEST,
-            category="administrative",
-            priority="medium",
-            student_confirmed=True,
+        execute.assert_called_once_with(
+            "create_support_ticket",
+            {
+                "student_id": DEFAULT_STUDENT_ID,
+                "summary": TICKET_REQUEST,
+                "original_message": TICKET_REQUEST,
+                "category": "administrative",
+                "priority": "medium",
+                "student_confirmed": True,
+            },
         )
 
     def test_ticket_uses_the_student_number_of_the_session(self) -> None:
