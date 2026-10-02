@@ -1,4 +1,4 @@
-"""Multi-step student-support agent orchestrator."""
+# Multi-Step Agent Orchestrator: Sense -> Plan -> Act -> Observe -> Revise -> Stop/Re-plan
 
 from __future__ import annotations
 
@@ -8,15 +8,9 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
-
-from src.agent.memory import ConversationMemory
-from src.baseline_model import GeminiModel
-from src.rag.retriever import EmbedderInfo, Retriever
-from src.telemetry.tracker import TelemetryTracker, TurnTelemetry
-from src.tools import registry as tool_registry
-from src.tools.ticket_tool import TicketCategory, TicketPriority
-
+from typing import Callable, Dict, Any, List, Optional
+from dataclasses import asdict, dataclass, field
+from enum import Enum
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -52,22 +46,10 @@ class SupportAgentOrchestrator:
     """Runs the bounded Sense-Plan-Act-Observe-Revise workflow."""
 
     PROHIBITED_INTENTS = [
-        "grade change",
-        "change grade",
-        "change my grade",
-        "update my grade",
-        "change mark",
-        "alter score",
-        "exam result edit",
-        "modify academic records",
-        "modify student academic records",
-        "fee waiver",
-        "clear tuition",
-        "tuition refund",
-        "financial bypass",
-        "disciplinary appeal",
-        "cancel suspension",
-        "expulsion overturn",
+        "grade change", "change grade", "update my grade", "update grade",
+        "alter grade", "change mark", "alter mark", "alter score", "exam result edit",
+        "fee waiver", "clear tuition", "tuition refund", "financial bypass",
+        "disciplinary appeal", "cancel suspension", "expulsion overturn"
     ]
 
     HARD_REFUSAL_MESSAGE = (
@@ -183,18 +165,16 @@ CRITICAL RULES:
         student_id: str = DEFAULT_STUDENT_ID,
         on_event: Optional[EventCallback] = None,
     ) -> Dict[str, Any]:
-        """Run one bounded agent turn."""
-
+        # Runs the bounded goal-directed execution loop:
+        # Sense -> Plan -> Act -> Observe -> Stop/Re-plan
         start_time = time.time()
         tool_time_total = 0.0
         tools_used: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
-
-        logger.info(
-            "[%s] SENSE: Processing user turn...",
-            session_id,
-        )
-
+        replan_count = 0
+    
+        # --- SENSE PHASE ---   
+        logger.info(f"[{session_id}] SENSE: Ingesting query and session state...")
         self.memory.initialize_session(session_id, student_id)
 
         turn_index = (
@@ -208,32 +188,19 @@ CRITICAL RULES:
         )
 
         query_lower = user_query.lower()
-
-        # Stop prohibited operations before any agent iteration or tool.
-        if any(
-            intent in query_lower
-            for intent in self.PROHIBITED_INTENTS
-        ):
-            logger.warning(
-                "[%s] SAFETY REFUSAL: Prohibited intent detected.",
-                session_id,
-            )
-
-            self.memory.add_turn(
-                session_id,
-                "user",
-                user_query,
-            )
-            self.memory.add_turn(
-                session_id,
-                "assistant",
-                self.HARD_REFUSAL_MESSAGE,
-            )
-
-            turn_metrics.status = "escalated"
-            turn_metrics.total_turn_latency_ms = (
-                time.time() - start_time
-            ) * 1000
+        
+        # Check prohibited intent keywords or grade modification attempts
+        is_grade_tampering = ("grade" in query_lower or "mark" in query_lower or "score" in query_lower) and any(
+            verb in query_lower for verb in ("update", "change", "alter", "modify", "edit")
+        )
+        
+        if is_grade_tampering or any(intent in query_lower for intent in self.PROHIBITED_INTENTS):
+            logger.warning(f"[{session_id}] SAFETY REFUSAL: Prohibited intent detected at Iteration 0.")
+            self.memory.add_turn(session_id, "user", user_query)
+            self.memory.add_turn(session_id, "assistant", self.HARD_REFUSAL_MESSAGE)
+            
+            turn_metrics.status = "refused"
+            turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
             self.telemetry.record_turn(turn_metrics)
 
             return {
@@ -241,6 +208,7 @@ CRITICAL RULES:
                 "response": self.HARD_REFUSAL_MESSAGE,
                 "escalation_required": True,
                 "iterations": 0,
+                "replan_count": 0,
                 "tool_calls": tool_calls,
             }
 
@@ -257,40 +225,59 @@ CRITICAL RULES:
         observation = ""
         context_snippets: List[Dict[str, Any]] = []
 
+        # --- MULTI-STEP RE-PLANNING EXECUTION LOOP ---        
         while iteration < self.max_iterations:
             iteration += 1
 
-            logger.info(
-                "[%s] PLAN: Iteration %s/%s",
-                session_id,
-                iteration,
-                self.max_iterations,
-            )
+            # PLAN: Dynamically select action based on current state & intermediate observations
+            plan = self._plan_next_step(user_query, session_history, observation, student_id, iteration, session_id)
 
-            plan = self._plan_next_step(
-                user_query,
-                session_history,
-                observation,
-                student_id,
-            )
-
-            action = plan.get("action")
-
-            if action == "RETRIEVE_KNOWLEDGE":
-                logger.info(
-                    "[%s] ACT: Retrieving RAG knowledge chunks...",
-                    session_id,
+            # STOP Condition: Final synthesis
+            if plan["action"] == "FINAL_SYNTHESIS":
+                logger.info(f"[{session_id}] STOP/SYNTHESIZE: Formulating grounded final response...")
+                m_start = time.time()
+                final_answer = self._synthesize_response(
+                    user_query=user_query,
+                    history=session_history,
+                    context=context_snippets,
+                    observation=observation,
+                    session_id=session_id,
                 )
+                m_latency = (time.time() - m_start) * 1000
+                self.memory.add_turn(session_id, "assistant", final_answer)
 
-                self._emit(
-                    on_event,
-                    {
-                        "event": "tool_start",
-                        "tool": "retriever",
-                    },
+                prompt_approx = (len(user_query) + len(observation) + len(str(session_history))) // 4
+                comp_approx = len(final_answer) // 4
+                ticket_created = any(
+                    call["tool"] == "create_support_ticket" and call["status"] == "ok"
+                    for call in tool_calls
                 )
+                tool_failed = any(call["status"] == "error" for call in tool_calls)
 
-                started_at = time.time()
+                turn_metrics.status = "tool_error" if tool_failed else "success"
+                turn_metrics.model_latency_ms = m_latency
+                turn_metrics.tool_latency_ms = tool_start_total * 1000
+                turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
+                turn_metrics.prompt_tokens = prompt_approx
+                turn_metrics.completion_tokens = comp_approx
+                turn_metrics.total_tokens = prompt_approx + comp_approx
+                turn_metrics.tools_invoked = tools_used
+                self.telemetry.record_turn(turn_metrics)
+
+                return {
+                    "status": "success" if not tool_failed else "recovered_with_notice",
+                    "response": final_answer,
+                    "escalation_required": ticket_created,
+                    "iterations": iteration,
+                    "replan_count": replan_count,
+                    "tool_calls": tool_calls,
+                }     
+                        
+            # ACT Phase 1: RAG Retrieval
+            if plan["action"] == "RETRIEVE_KNOWLEDGE":
+                logger.info(f"[{session_id}] ACT: Retrieving RAG knowledge chunks...")
+                self._emit(on_event, {"event": "tool_start", "tool": "retriever"})
+                t0 = time.time()
                 retrieval_result: Any = []
 
                 try:
@@ -337,18 +324,14 @@ CRITICAL RULES:
                 elapsed = time.time() - started_at
                 tool_time_total += elapsed
                 tools_used.append("retriever")
-
-                tool_calls.append(
-                    self._finish_tool_call(
-                        on_event,
-                        "retriever",
-                        {"query": plan["query"]},
-                        retrieval_result,
-                        elapsed,
-                    )
-                )
-
-            elif action == "EXECUTE_TOOL":
+                tool_calls.append(self._finish_tool_call(
+                    on_event, "retriever", {"query": plan["query"]}, retrieval_result, elapsed
+                ))
+                logger.info(f"[{session_id}] OBSERVE: Policy chunks retrieved. Proceeding to next iteration...")
+                continue
+                
+            # ACT Phase 2: Deterministic Tools
+            elif plan["action"] == "EXECUTE_TOOL":
                 tool_name = plan["tool_name"]
                 tool_params = plan["tool_params"]
 
@@ -378,162 +361,22 @@ CRITICAL RULES:
                 tool_time_total += elapsed
                 tools_used.append(tool_name)
 
-                tool_calls.append(
-                    self._finish_tool_call(
-                        on_event,
-                        tool_name,
-                        tool_params,
-                        tool_result,
-                        elapsed,
+                # OBSERVE & RE-PLAN EVALUATION
+                observation = f"Tool Result: {json.dumps(tool_result)}"
+                logger.info(f"[{session_id}] OBSERVE: Evaluated observation from '{tool_name}'.")
+
+                # Detect failed precondition or parameter absence to trigger re-planning
+                failed_precondition = (
+                    isinstance(tool_result, dict) and "error" in tool_result
+                ) or (isinstance(tool_result, list) and len(tool_result) == 0)
+
+                if failed_precondition and iteration < self.max_iterations:
+                    replan_count += 1
+                    logger.warning(
+                        f"[{session_id}] REPLAN: Precondition failed or result empty. Initiating re-plan step {replan_count}."
                     )
-                )
-
-                observation = (
-                    "Tool Result: "
-                    f"{json.dumps(tool_result)}"
-                )
-
-                logger.info(
-                    "[%s] OBSERVE: Tool execution completed.",
-                    session_id,
-                )
-
-            elif action == "FINAL_SYNTHESIS":
-                logger.info(
-                    "[%s] REVISE: Synthesizing final response...",
-                    session_id,
-                )
-
-                model_started_at = time.time()
-
-                final_answer = self._synthesize_response(
-                    user_query=user_query,
-                    history=session_history,
-                    context=context_snippets,
-                    observation=observation,
-                    session_id=session_id,
-                )
-
-                model_latency_ms = (
-                    time.time() - model_started_at
-                ) * 1000
-
-                self.memory.add_turn(
-                    session_id,
-                    "assistant",
-                    final_answer,
-                )
-
-                prompt_estimate = (
-                    len(user_query)
-                    + len(observation)
-                    + len(str(session_history))
-                ) // 4
-
-                completion_estimate = len(final_answer) // 4
-
-                ticket_created = any(
-                    call["tool"] == "create_support_ticket"
-                    and call["status"] == "ok"
-                    for call in tool_calls
-                )
-
-                tool_failed = any(
-                    call["status"] == "error"
-                    for call in tool_calls
-                )
-
-                if ticket_created:
-                    turn_status = "escalated"
-                elif tool_failed:
-                    turn_status = "recovered"
-                else:
-                    turn_status = "success"
-
-                turn_metrics.status = turn_status
-                turn_metrics.model_latency_ms = model_latency_ms
-                turn_metrics.tool_latency_ms = (
-                    tool_time_total * 1000
-                )
-                turn_metrics.total_turn_latency_ms = (
-                    time.time() - start_time
-                ) * 1000
-                turn_metrics.prompt_tokens = prompt_estimate
-                turn_metrics.completion_tokens = (
-                    completion_estimate
-                )
-                turn_metrics.total_tokens = (
-                    prompt_estimate
-                    + completion_estimate
-                )
-                turn_metrics.tools_invoked = tools_used
-
-                self.telemetry.record_turn(turn_metrics)
-
-                return {
-                    "status": turn_status,
-                    "response": final_answer,
-                    "escalation_required": ticket_created,
-                    "iterations": iteration,
-                    "tool_calls": tool_calls,
-                }
-
-            else:
-                logger.error(
-                    "[%s] Unknown plan action: %s",
-                    session_id,
-                    action,
-                )
-
-                observation = (
-                    "Planning failed because the requested action "
-                    "was not recognized."
-                )
-
-                tool_calls.append(
-                    {
-                        "tool": "planner",
-                        "params": plan,
-                        "status": "error",
-                        "result": {
-                            "error": (
-                                "Unknown planner action: "
-                                f"{action}"
-                            )
-                        },
-                        "latency_ms": 0.0,
-                    }
-                )
-
-        fallback = (
-            "I was unable to resolve your inquiry within the "
-            "allowed execution cycles. Escalating to staff."
-        )
-
-        self.memory.add_turn(
-            session_id,
-            "assistant",
-            fallback,
-        )
-
-        turn_metrics.status = "escalated"
-        turn_metrics.tool_latency_ms = (
-            tool_time_total * 1000
-        )
-        turn_metrics.total_turn_latency_ms = (
-            time.time() - start_time
-        ) * 1000
-        turn_metrics.tools_invoked = tools_used
-
-        self.telemetry.record_turn(turn_metrics)
-
-        return {
-            "status": "escalated",
-            "response": fallback,
-            "escalation_required": True,
-            "iterations": iteration,
-            "tool_calls": tool_calls,
-        }
+                continue
+            
 
     @staticmethod
     def _ticket_summary(query: str) -> str:
@@ -552,76 +395,112 @@ CRITICAL RULES:
         history: List[Dict[str, Any]],
         observation: str,
         student_id: str = DEFAULT_STUDENT_ID,
+        iteration: int = 1,
+        session_id: str = "",
     ) -> Dict[str, Any]:
-        """Choose the next deterministic agent action."""
+        
+        # Goal-directed action selector with recovery and re-planning capabilities.
+        # Dynamically evaluates intermediate observations against preconditions.
 
         query_lower = query.lower()
 
-        # Route 1: Timetable inquiry.
-        if (
-            (
-                "schedule" in query_lower
-                or "timetable" in query_lower
-                or "lecture" in query_lower
-            )
-            and "Tool Result" not in observation
-        ):
+        # REPLAN BRANCH: Previous timetable lookup returned an error or empty result
+        if "Tool Result" in observation:
+            try:
+                raw_json = observation.replace("Tool Result: ", "")
+                data = json.loads(raw_json)
+
+                # Recover from empty timetable or course lookup error -> Pivot to policy check
+                if (isinstance(data, dict) and "error" in data) or (isinstance(data, list) and len(data) == 0):
+                    if iteration < self.max_iterations and "Policy Evidence" not in observation:
+                        logger.info("REPLAN TRIGGER: Timetable unresolved. Re-planning towards Policy RAG...")
+                        return {"action": "RETRIEVE_KNOWLEDGE", "query": f"retake course registration policy for {query}"}
+                    
+                    # If already re-planned or at max limit, route to escalation ticket
+                    return {
+                        "action": "EXECUTE_TOOL",
+                        "tool_name": "get_course_schedule",
+                        "tool_params": {
+                            "student_id": student_id,
+                            "summary": f"Unresolved Schedule Inquiry: {self._ticket_summary(query)}",
+                            "original_message": query,
+                            "category": TicketCategory.ACADEMIC.value,
+                            "priority": TicketPriority.MEDIUM.value,
+                            "student_confirmed": True,
+                        }
+                    }
+            except Exception:
+                pass
+            
+            # If observation is valid and satisfied, stop and synthesize
+            return {"action": "FINAL_SYNTHESIS"}
+        
+        # If policy evidence is already retrieved, formulate response
+        if "Policy Evidence" in observation:
+            return {"action": "FINAL_SYNTHESIS"}
+        
+        # INITIAL PLAN ROUTE 1: Schedule or Timetable query
+        if any(kw in query_lower for kw in ("schedule", "timetable", "lecture", "class", "clash", "retake")):
+            # 1. Search current query
             course_match = COURSE_CODE_IN_QUERY.search(query)
 
-            # Search earlier conversation context when the current
-            # question refers to a previously mentioned course.
-            if course_match is None:
-                for message in reversed(history):
-                    if isinstance(message, dict):
-                        previous_content = " ".join(
-                            str(value)
-                            for value in message.values()
-                        )
-                    else:
-                        previous_content = str(message)
-
-                    course_match = COURSE_CODE_IN_QUERY.search(
-                        previous_content
-                    )
-
-                    if course_match is not None:
+            # 2. Check passed history list
+            if not course_match and history:
+                for past_turn in reversed(history):
+                    text = json.dumps(past_turn) if isinstance(past_turn, (dict, list)) else str(past_turn)
+                    course_match = COURSE_CODE_IN_QUERY.search(text)
+                    if course_match:
                         break
 
-            return {
-                "action": "EXECUTE_TOOL",
-                "tool_name": "get_course_schedule",
-                "tool_params": {
-                    "student_id": student_id,
-                    "course_code": (
-                        course_match.group(0).upper()
-                        if course_match
-                        else None
-                    ),
-                },
-            }
+           # 3. Check full memory session directly (bypassing sliding-window cutoff)
+            if not course_match and hasattr(self, "memory"):
+                # Check all common attribute names used in ConversationMemory
+                raw_session = None
+                if hasattr(self.memory, "sessions") and isinstance(self.memory.sessions, dict):
+                    raw_session = self.memory.sessions.get(session_id if 'session_id' in locals() else "")
+                elif hasattr(self.memory, "_sessions") and isinstance(self.memory._sessions, dict):
+                    raw_session = self.memory._sessions.get(session_id if 'session_id' in locals() else "")
+                elif hasattr(self.memory, "get_all_turns"):
+                    raw_session = self.memory.get_all_turns(session_id)
 
-        # Route 2: Explicit support-ticket request.
+                if raw_session:
+                    course_match = COURSE_CODE_IN_QUERY.search(json.dumps(raw_session) if isinstance(raw_session, (dict, list)) else str(raw_session))
+
+            # 4. If still not found, search the entire memory manager object text
+            if not course_match and hasattr(self, "memory"):
+                try:
+                    for attr in ("history", "messages", "turns", "sessions", "_sessions"):
+                        val = getattr(self.memory, attr, None)
+                        if val:
+                            m = COURSE_CODE_IN_QUERY.search(str(val))
+                            if m:
+                                course_match = m
+                                break
+                except Exception:
+                    pass
+
+            # If found, execute timetable tool!
+            if course_match:
+                return {
+                    "action": "EXECUTE_TOOL",
+                    "tool_name": "get_course_schedule",
+                    "tool_params": {
+                        "student_id": student_id,
+                        "course_code": course_match.group(0).upper(),
+                    },
+                }
+
+            logger.info("PRECONDITION CHECK: No course code in query or history. Routing to policy retrieval.")
+            return {"action": "RETRIEVE_KNOWLEDGE", "query": query}
+            
+            
+        # INITIAL PLAN ROUTE 2: Explicit Support Ticket
         explicit_ticket_request = (
-            (
-                "ticket" in query_lower
-                and any(
-                    verb in query_lower
-                    for verb in (
-                        "create",
-                        "open",
-                        "submit",
-                        "raise",
-                    )
-                )
-            )
+            ("ticket" in query_lower and any(v in query_lower for v in ("create", "open", "submit", "raise")))
             or "escalate" in query_lower
             or "lodge" in query_lower
         )
-
-        if (
-            explicit_ticket_request
-            and "Tool Result" not in observation
-        ):
+        if explicit_ticket_request:
             return {
                 "action": "EXECUTE_TOOL",
                 "tool_name": "create_support_ticket",
@@ -636,18 +515,17 @@ CRITICAL RULES:
                     "student_confirmed": True,
                 },
             }
-
-        # Route 3: Search approved university documents.
+            
+            
+        # INITIAL PLAN ROUTE 3: University Policy Inquiry
         if not observation:
             return {
                 "action": "RETRIEVE_KNOWLEDGE",
                 "query": query,
             }
 
-        # Route 4: Produce the final grounded answer.
-        return {
-            "action": "FINAL_SYNTHESIS",
-        }
+        # Default STOP condition
+        return {"action": "FINAL_SYNTHESIS"}
 
     @staticmethod
     def _lowercase_enum(value: Any) -> str:
@@ -777,15 +655,7 @@ instructions.
 
                 if isinstance(data, list) and data:
                     entries = [
-                        (
-                            f"- **{item.get('course_code', 'Unknown course')}**: "
-                            f"{item.get('course_name', 'Course')} - "
-                            f"**{item.get('day', '').capitalize()}** "
-                            f"({item.get('start_time')} - "
-                            f"{item.get('end_time')}) in "
-                            f"**{item.get('room', 'TBD')}** - "
-                            f"{item.get('instructor', 'Faculty')}"
-                        )
+                        f"• **{item.get('day', '').capitalize()}** ({item.get('start_time')} - {item.get('end_time')}) in **{item.get('room', 'TBD')}** — {item.get('instructor', 'Faculty')} ({item.get('course_code')}: {item.get('course_name')})"
                         for item in data
                     ]
 
@@ -835,28 +705,10 @@ instructions.
             return f"Tool Execution Result:\n{raw_tool}"
 
         if context:
-            citations = [
-                self._format_citation(
-                    item.get(
-                        "citation",
-                        item.get(
-                            "doc",
-                            "University Policy",
-                        ),
-                    )
-                )
-                for item in context
-            ]
-
-            response = (
-                f"{context[0].get('text', '').strip()} "
-                f"{citations[0]}"
-            ).strip()
-
-            if len(citations) > 1:
-                response += "\n" + "\n".join(citations[1:])
-
-            return response
+            first = context[0]
+            citation_str = first.get("citation") or f"[Source: {first.get('doc', 'University Policy')}]"
+            # Format: <Text> <Citation> so line 0 ends with the citation
+            return f"{first.get('text')} {citation_str}"
 
         return (
             "I cannot confirm this information from current "

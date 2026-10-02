@@ -14,6 +14,7 @@ __pycache__/
 logs/
 .coverage
 htmlcov/
+.cpython-312.pyc
 
 # # Runtime Session Transcripts (GDPR Compliance & Student Privacy)
 data/sessions/*.json
