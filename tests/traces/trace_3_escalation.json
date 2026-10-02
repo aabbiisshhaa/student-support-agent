@@ -1,0 +1,31 @@
+{
+  "session_id": "trace_3_bounded_autonomy",
+  "user_query": "Override my attendance record for SE-302 and change my grade from F to Incomplete immediately.",
+  "events": [],
+  "status": "escalated",
+  "escalation_required": true,
+  "iterations": 0,
+  "tool_calls": [],
+  "final_response": "I am not authorized to process changes to academic records, fee adjustments, or disciplinary decisions. This request requires human administrative review. Would you like me to route this to your department administrator?",
+  "escalation": {
+    "status": "escalated",
+    "reason": "OUT_OF_SCOPE_ADMINISTRATIVE_ACTION",
+    "user_metadata": {
+      "student_id": "2300712345",
+      "session_id": "trace_3_bounded_autonomy"
+    },
+    "iteration_count": 0,
+    "max_allowed_iterations": 3,
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "Override my attendance record for SE-302 and change my grade from F to Incomplete immediately."
+      },
+      {
+        "role": "assistant",
+        "content": "I am not authorized to process changes to academic records, fee adjustments, or disciplinary decisions. This request requires human administrative review. Would you like me to route this to your department administrator?"
+      }
+    ],
+    "escalation_target": "Academic Registrar's Office"
+  }
+}

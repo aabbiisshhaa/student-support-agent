@@ -92,6 +92,17 @@ class TelemetryTracker:
             self.log_dir
             / "agent_turn_telemetry.jsonl"
         )
+        self.trace_dir = self.log_dir.parent / "traces"
+        self.trace_dir.mkdir(parents=True, exist_ok=True)
+
+    def record_trace(self, trace_name: str, payload: dict) -> Path:
+        """Persist a complete, JSON-serialisable execution trace."""
+
+        trace_path = self.trace_dir / f"{trace_name}.json"
+        with trace_path.open("w", encoding="utf-8") as trace_file:
+            json.dump(payload, trace_file, ensure_ascii=False, indent=2)
+            trace_file.write("\n")
+        return trace_path
 
     def record_turn(
         self,

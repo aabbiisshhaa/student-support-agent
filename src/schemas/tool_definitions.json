@@ -5,6 +5,75 @@
   "tools": [
     {
       "type": "function",
+      "name": "search_academic_policy",
+      "description": "Searches approved university policy documents and returns cited passages.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "top_k": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    },
+    {
+      "type": "function",
+      "name": "escalate_to_human_admin",
+      "description": "Creates a non-mutating, auditable hand-off payload for human administration.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "student_id": {
+            "type": "string",
+            "minLength": 3
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "conversation_history": {
+            "type": "array"
+          },
+          "iteration_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_allowed_iterations": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "escalation_target": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "session_id",
+          "student_id",
+          "reason",
+          "conversation_history",
+          "iteration_count",
+          "max_allowed_iterations"
+        ]
+      }
+    },
+    {
+      "type": "function",
       "name": "get_course_schedule",
       "description": "Retrieves the authenticated student's current course schedule from the timetable database. This tool is read-only and must never generate or change timetable information.",
       "parameters": {

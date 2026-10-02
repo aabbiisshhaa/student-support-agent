@@ -36,7 +36,15 @@ class IsolatedDatabaseTestCase(unittest.TestCase):
 
 class TestExecutionWhitelist(unittest.TestCase):
     def test_only_the_two_approved_tools_are_registered(self) -> None:
-        self.assertEqual(registry.list_tools(), ("create_support_ticket", "get_course_schedule"))
+        self.assertEqual(
+            registry.list_tools(),
+            (
+                "create_support_ticket",
+                "escalate_to_human_admin",
+                "get_course_schedule",
+                "search_academic_policy",
+            ),
+        )
 
     def test_registered_tool_names_report_as_registered(self) -> None:
         self.assertTrue(registry.is_registered("get_course_schedule"))

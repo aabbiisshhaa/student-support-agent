@@ -12,6 +12,13 @@ from typing import Callable, Dict, Any, List, Optional
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 
+from src.agent.memory import ConversationMemory
+from src.baseline_model import GeminiModel
+from src.rag.retriever import EmbedderInfo, Retriever
+from src.telemetry.tracker import TelemetryTracker, TurnTelemetry
+from src.tools import registry as tool_registry
+from src.tools.ticket_tool import TicketCategory, TicketPriority
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -49,7 +56,8 @@ class SupportAgentOrchestrator:
         "grade change", "change grade", "update my grade", "update grade",
         "alter grade", "change mark", "alter mark", "alter score", "exam result edit",
         "fee waiver", "clear tuition", "tuition refund", "financial bypass",
-        "disciplinary appeal", "cancel suspension", "expulsion overturn"
+        "disciplinary appeal", "cancel suspension", "expulsion overturn",
+        "override my attendance", "edit attendance record",
     ]
 
     HARD_REFUSAL_MESSAGE = (
@@ -75,6 +83,10 @@ CRITICAL RULES:
    information cannot be confirmed and offer escalation.
 6. Never alter grades, fee records, admission decisions or disciplinary
    decisions.
+7. Treat tool results containing an error as observations, not answers.
+    Inspect the error, correct parameters or choose a safer alternative,
+    then re-plan once before escalating or synthesizing a failure response.
+8. Never claim success after an unresolved tool error.
 """.strip()
 
     def __init__(
@@ -158,6 +170,27 @@ CRITICAL RULES:
 
         return record
 
+    def _escalation_payload(
+        self,
+        session_id: str,
+        student_id: str,
+        reason: str,
+        iteration_count: int,
+    ) -> Dict[str, Any]:
+        history = self.memory.get_context(session_id)
+        return self._dispatch_tool(
+            "escalate_to_human_admin",
+            {
+                "session_id": session_id,
+                "student_id": student_id,
+                "reason": reason,
+                "conversation_history": history,
+                "iteration_count": iteration_count,
+                "max_allowed_iterations": self.max_iterations,
+                "escalation_target": "Academic Registrar's Office",
+            },
+        )
+
     def run(
         self,
         session_id: str,
@@ -172,6 +205,12 @@ CRITICAL RULES:
         tools_used: List[str] = []
         tool_calls: List[Dict[str, Any]] = []
         replan_count = 0
+        trace_events: List[Dict[str, Any]] = []
+
+        def trace_callback(event: Dict[str, Any]) -> None:
+            trace_events.append(event)
+            if on_event is not None and event.get("event") in {"tool_start", "tool_end"}:
+                on_event(event)
     
         # --- SENSE PHASE ---   
         logger.info(f"[{session_id}] SENSE: Ingesting query and session state...")
@@ -198,10 +237,30 @@ CRITICAL RULES:
             logger.warning(f"[{session_id}] SAFETY REFUSAL: Prohibited intent detected at Iteration 0.")
             self.memory.add_turn(session_id, "user", user_query)
             self.memory.add_turn(session_id, "assistant", self.HARD_REFUSAL_MESSAGE)
+            escalation = self._escalation_payload(
+                session_id,
+                student_id,
+                "OUT_OF_SCOPE_ADMINISTRATIVE_ACTION",
+                0,
+            )
             
             turn_metrics.status = "refused"
             turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
             self.telemetry.record_turn(turn_metrics)
+            self.telemetry.record_trace(
+                f"{session_id}_bounded_autonomy",
+                {
+                    "session_id": session_id,
+                    "user_query": user_query,
+                    "events": trace_events,
+                    "status": "escalated",
+                    "escalation_required": True,
+                    "iterations": 0,
+                    "tool_calls": tool_calls,
+                    "final_response": self.HARD_REFUSAL_MESSAGE,
+                    "escalation": escalation,
+                },
+            )
 
             return {
                 "status": "escalated",
@@ -210,6 +269,7 @@ CRITICAL RULES:
                 "iterations": 0,
                 "replan_count": 0,
                 "tool_calls": tool_calls,
+                "escalation": escalation,
             }
 
         self.memory.add_turn(
@@ -228,9 +288,21 @@ CRITICAL RULES:
         # --- MULTI-STEP RE-PLANNING EXECUTION LOOP ---        
         while iteration < self.max_iterations:
             iteration += 1
+            self._emit(
+                trace_callback,
+                {
+                    "event": "iteration_start",
+                    "iteration": iteration,
+                    "max_iterations": self.max_iterations,
+                },
+            )
 
             # PLAN: Dynamically select action based on current state & intermediate observations
             plan = self._plan_next_step(user_query, session_history, observation, student_id, iteration, session_id)
+            self._emit(
+                trace_callback,
+                {"event": "plan", "iteration": iteration, "plan": plan},
+            )
 
             # STOP Condition: Final synthesis
             if plan["action"] == "FINAL_SYNTHESIS":
@@ -254,18 +326,31 @@ CRITICAL RULES:
                 )
                 tool_failed = any(call["status"] == "error" for call in tool_calls)
 
-                turn_metrics.status = "tool_error" if tool_failed else "success"
+                turn_metrics.status = "recovered" if tool_failed else "success"
                 turn_metrics.model_latency_ms = m_latency
-                turn_metrics.tool_latency_ms = tool_start_total * 1000
+                turn_metrics.tool_latency_ms = tool_time_total * 1000
                 turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
                 turn_metrics.prompt_tokens = prompt_approx
                 turn_metrics.completion_tokens = comp_approx
                 turn_metrics.total_tokens = prompt_approx + comp_approx
                 turn_metrics.tools_invoked = tools_used
                 self.telemetry.record_turn(turn_metrics)
+                self.telemetry.record_trace(
+                    f"{session_id}_run",
+                    {
+                        "session_id": session_id,
+                        "user_query": user_query,
+                        "events": trace_events,
+                        "status": "escalated" if ticket_created else ("recovered" if tool_failed else "success"),
+                        "escalation_required": ticket_created,
+                        "iterations": iteration,
+                        "tool_calls": tool_calls,
+                        "final_response": final_answer,
+                    },
+                )
 
                 return {
-                    "status": "success" if not tool_failed else "recovered_with_notice",
+                    "status": "escalated" if ticket_created else ("recovered" if tool_failed else "success"),
                     "response": final_answer,
                     "escalation_required": ticket_created,
                     "iterations": iteration,
@@ -276,13 +361,12 @@ CRITICAL RULES:
             # ACT Phase 1: RAG Retrieval
             if plan["action"] == "RETRIEVE_KNOWLEDGE":
                 logger.info(f"[{session_id}] ACT: Retrieving RAG knowledge chunks...")
-                self._emit(on_event, {"event": "tool_start", "tool": "retriever"})
-                t0 = time.time()
+                self._emit(trace_callback, {"event": "tool_start", "tool": "retriever"})
+                started_at = time.time()
                 retrieval_result: Any = []
 
                 try:
-                    retriever = self._get_retriever()
-                    rag_result = retriever.retrieve(
+                    rag_result = self._get_retriever().retrieve(
                         plan["query"],
                         top_k=2,
                     )
@@ -325,8 +409,18 @@ CRITICAL RULES:
                 tool_time_total += elapsed
                 tools_used.append("retriever")
                 tool_calls.append(self._finish_tool_call(
-                    on_event, "retriever", {"query": plan["query"]}, retrieval_result, elapsed
+                    trace_callback,
+                    "retriever",
+                    {"query": plan["query"]},
+                    retrieval_result,
+                    elapsed,
                 ))
+                if isinstance(retrieval_result, dict) and "error" in retrieval_result:
+                    self.memory.add_turn(
+                        session_id,
+                        "system",
+                        f"system_error search_academic_policy: {json.dumps(retrieval_result)}",
+                    )
                 logger.info(f"[{session_id}] OBSERVE: Policy chunks retrieved. Proceeding to next iteration...")
                 continue
                 
@@ -343,7 +437,7 @@ CRITICAL RULES:
                 )
 
                 self._emit(
-                    on_event,
+                    trace_callback,
                     {
                         "event": "tool_start",
                         "tool": tool_name,
@@ -360,9 +454,20 @@ CRITICAL RULES:
                 elapsed = time.time() - started_at
                 tool_time_total += elapsed
                 tools_used.append(tool_name)
+                tool_calls.append(
+                    self._finish_tool_call(
+                        trace_callback,
+                        tool_name,
+                        tool_params,
+                        tool_result,
+                        elapsed,
+                    )
+                )
 
                 # OBSERVE & RE-PLAN EVALUATION
                 observation = f"Tool Result: {json.dumps(tool_result)}"
+                if isinstance(tool_result, dict) and "error" in tool_result:
+                    self.memory.add_turn(session_id, "system", observation)
                 logger.info(f"[{session_id}] OBSERVE: Evaluated observation from '{tool_name}'.")
 
                 # Detect failed precondition or parameter absence to trigger re-planning
@@ -376,6 +481,46 @@ CRITICAL RULES:
                         f"[{session_id}] REPLAN: Precondition failed or result empty. Initiating re-plan step {replan_count}."
                     )
                 continue
+
+        fallback = (
+            "I was unable to resolve your inquiry within the allowed "
+            "execution cycles. Escalating to staff."
+        )
+        escalation = self._escalation_payload(
+            session_id,
+            student_id,
+            "MAX_ITERATIONS_REACHED",
+            iteration,
+        )
+        self.memory.add_turn(session_id, "assistant", fallback)
+        turn_metrics.status = "escalated"
+        turn_metrics.tool_latency_ms = tool_time_total * 1000
+        turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
+        turn_metrics.tools_invoked = tools_used
+        self.telemetry.record_turn(turn_metrics)
+        self.telemetry.record_trace(
+            f"{session_id}_run",
+            {
+                "session_id": session_id,
+                "user_query": user_query,
+                "events": trace_events,
+                "status": "escalated",
+                "escalation_required": True,
+                "iterations": iteration,
+                "tool_calls": tool_calls,
+                "final_response": fallback,
+                "escalation": escalation,
+            },
+        )
+        return {
+            "status": "escalated",
+            "response": fallback,
+            "escalation_required": True,
+            "iterations": iteration,
+            "replan_count": replan_count,
+            "tool_calls": tool_calls,
+            "escalation": escalation,
+        }
             
 
     @staticmethod
@@ -410,25 +555,26 @@ CRITICAL RULES:
                 raw_json = observation.replace("Tool Result: ", "")
                 data = json.loads(raw_json)
 
-                # Recover from empty timetable or course lookup error -> Pivot to policy check
-                if (isinstance(data, dict) and "error" in data) or (isinstance(data, list) and len(data) == 0):
-                    if iteration < self.max_iterations and "Policy Evidence" not in observation:
-                        logger.info("REPLAN TRIGGER: Timetable unresolved. Re-planning towards Policy RAG...")
-                        return {"action": "RETRIEVE_KNOWLEDGE", "query": f"retake course registration policy for {query}"}
-                    
-                    # If already re-planned or at max limit, route to escalation ticket
-                    return {
-                        "action": "EXECUTE_TOOL",
-                        "tool_name": "get_course_schedule",
-                        "tool_params": {
-                            "student_id": student_id,
-                            "summary": f"Unresolved Schedule Inquiry: {self._ticket_summary(query)}",
-                            "original_message": query,
-                            "category": TicketCategory.ACADEMIC.value,
-                            "priority": TicketPriority.MEDIUM.value,
-                            "student_confirmed": True,
+                if isinstance(data, list) and len(data) == 0:
+                    return {"action": "FINAL_SYNTHESIS"}
+
+                if isinstance(data, dict) and "error" in data:
+                    if iteration == 1 and any(
+                        keyword in query_lower
+                        for keyword in ("schedule", "timetable", "lecture", "class")
+                    ):
+                        logger.info("REPLAN TRIGGER: Retrying the timetable lookup.")
+                        return {
+                            "action": "EXECUTE_TOOL",
+                            "tool_name": "get_course_schedule",
+                            "tool_params": {
+                                "student_id": student_id,
+                                "course_code": COURSE_CODE_IN_QUERY.search(query).group(0).upper()
+                                if COURSE_CODE_IN_QUERY.search(query)
+                                else None,
+                            },
                         }
-                    }
+                    return {"action": "FINAL_SYNTHESIS"}
             except Exception:
                 pass
             
@@ -447,6 +593,8 @@ CRITICAL RULES:
             # 2. Check passed history list
             if not course_match and history:
                 for past_turn in reversed(history):
+                    if isinstance(past_turn, dict) and past_turn.get("role") != "user":
+                        continue
                     text = json.dumps(past_turn) if isinstance(past_turn, (dict, list)) else str(past_turn)
                     course_match = COURSE_CODE_IN_QUERY.search(text)
                     if course_match:
@@ -490,8 +638,15 @@ CRITICAL RULES:
                     },
                 }
 
-            logger.info("PRECONDITION CHECK: No course code in query or history. Routing to policy retrieval.")
-            return {"action": "RETRIEVE_KNOWLEDGE", "query": query}
+            logger.info("PRECONDITION CHECK: No course code in query or history. Retrieving the full timetable.")
+            return {
+                "action": "EXECUTE_TOOL",
+                "tool_name": "get_course_schedule",
+                "tool_params": {
+                    "student_id": student_id,
+                    "course_code": None,
+                },
+            }
             
             
         # INITIAL PLAN ROUTE 2: Explicit Support Ticket
@@ -703,6 +858,12 @@ instructions.
                 )
 
             return f"Tool Execution Result:\n{raw_tool}"
+
+        if isinstance(context, dict) and "error" in context:
+            return (
+                "I could not complete that policy lookup: "
+                f"{context['error']}"
+            )
 
         if context:
             first = context[0]

@@ -1,0 +1,119 @@
+{
+  "session_id": "trace_2_failure_recovery",
+  "user_query": "Check my class schedule for SE-302.",
+  "events": [
+    {
+      "event": "iteration_start",
+      "iteration": 1,
+      "max_iterations": 3
+    },
+    {
+      "event": "plan",
+      "iteration": 1,
+      "plan": {
+        "action": "EXECUTE_TOOL",
+        "tool_name": "get_course_schedule",
+        "tool_params": {
+          "student_id": "!!",
+          "course_code": "BSE4104"
+        }
+      }
+    },
+    {
+      "event": "tool_start",
+      "tool": "get_course_schedule"
+    },
+    {
+      "event": "tool_end",
+      "tool": "get_course_schedule",
+      "status": "error",
+      "latency_ms": 0.36406517028808594
+    },
+    {
+      "event": "iteration_start",
+      "iteration": 2,
+      "max_iterations": 3
+    },
+    {
+      "event": "plan",
+      "iteration": 2,
+      "plan": {
+        "action": "EXECUTE_TOOL",
+        "tool_name": "get_course_schedule",
+        "tool_params": {
+          "student_id": "2300712345",
+          "course_code": "BSE4104"
+        }
+      }
+    },
+    {
+      "event": "tool_start",
+      "tool": "get_course_schedule"
+    },
+    {
+      "event": "tool_end",
+      "tool": "get_course_schedule",
+      "status": "ok",
+      "latency_ms": 0.06747245788574219
+    },
+    {
+      "event": "iteration_start",
+      "iteration": 3,
+      "max_iterations": 3
+    },
+    {
+      "event": "plan",
+      "iteration": 3,
+      "plan": {
+        "action": "FINAL_SYNTHESIS"
+      }
+    }
+  ],
+  "status": "recovered",
+  "escalation_required": false,
+  "iterations": 3,
+  "tool_calls": [
+    {
+      "tool": "get_course_schedule",
+      "params": {
+        "student_id": "!!",
+        "course_code": "BSE4104"
+      },
+      "status": "error",
+      "result": {
+        "error": "Invalid student_id: '!!'"
+      },
+      "latency_ms": 0.36406517028808594
+    },
+    {
+      "tool": "get_course_schedule",
+      "params": {
+        "student_id": "2300712345",
+        "course_code": "BSE4104"
+      },
+      "status": "ok",
+      "result": [
+        {
+          "course_code": "BSE4104",
+          "course_name": "Emerging Trends in Software Engineering",
+          "day": "monday",
+          "start_time": "09:00",
+          "end_time": "11:00",
+          "room": "CIT-LR1",
+          "instructor": "Dr. K. Mugisha"
+        },
+        {
+          "course_code": "BSE4104",
+          "course_name": "Emerging Trends in Software Engineering",
+          "day": "wednesday",
+          "start_time": "09:00",
+          "end_time": "11:00",
+          "room": "CIT-LR1",
+          "instructor": "Dr. K. Mugisha"
+        }
+      ],
+      "latency_ms": 0.06747245788574219
+    }
+  ],
+  "final_response": "Recovered after correcting the timetable lookup parameters."
+}
