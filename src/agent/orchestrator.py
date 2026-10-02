@@ -1,4 +1,4 @@
-# Multi-Step Agent Orchestrator: Sense -> Plan -> Act -> Observe -> Revise
+# Multi-Step Agent Orchestrator: Sense -> Plan -> Act -> Observe -> Revise -> Stop/Re-plan
 
 import os
 import re
@@ -8,6 +8,8 @@ import json
 import logging
 from pathlib import Path
 from typing import Callable, Dict, Any, List, Optional
+from dataclasses import asdict, dataclass, field
+from enum import Enum
 
 # Ensure workspace root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -43,7 +45,8 @@ class SupportAgentOrchestrator:
     # Combines hard safety boundaries, deterministic tool dispatch, live RAG retrieval, and Gemini LLM response synthesis.
     
     PROHIBITED_INTENTS = [
-        "grade change", "change mark", "alter score", "exam result edit",
+        "grade change", "change grade", "update my grade", "update grade",
+        "alter grade", "change mark", "alter mark", "alter score", "exam result edit",
         "fee waiver", "clear tuition", "tuition refund", "financial bypass",
         "disciplinary appeal", "cancel suspension", "expulsion overturn"
     ]
@@ -119,13 +122,16 @@ CRITICAL RULES:
         student_id: str = DEFAULT_STUDENT_ID,
         on_event: Optional[EventCallback] = None,
     ) -> Dict[str, Any]:
-        # Runs the primary Sense -> Plan -> Act -> Observe -> Revise cycle with telemetry instrumentation."""
+        # Runs the bounded goal-directed execution loop:
+        # Sense -> Plan -> Act -> Observe -> Stop/Re-plan
         start_time = time.time()
         tool_start_total = 0.0
         tools_used = []
         tool_calls: List[Dict[str, Any]] = []
-
-        logger.info(f"[{session_id}] SENSE: Processing user turn...")
+        replan_count = 0
+    
+        # --- SENSE PHASE ---   
+        logger.info(f"[{session_id}] SENSE: Ingesting query and session state...")
         self.memory.initialize_session(session_id, student_id)
         
         turn_idx = len(self.memory.get_recent_history(session_id)) + 1
@@ -137,8 +143,14 @@ CRITICAL RULES:
 
         # 1. Deterministic Safety Boundary Refusal (Iteration 0)
         query_lower = user_query.lower()
-        if any(intent in query_lower for intent in self.PROHIBITED_INTENTS):
-            logger.warning(f"[{session_id}] SAFETY REFUSAL: Prohibited intent detected.")
+        
+        # Check prohibited intent keywords or grade modification attempts
+        is_grade_tampering = ("grade" in query_lower or "mark" in query_lower or "score" in query_lower) and any(
+            verb in query_lower for verb in ("update", "change", "alter", "modify", "edit")
+        )
+        
+        if is_grade_tampering or any(intent in query_lower for intent in self.PROHIBITED_INTENTS):
+            logger.warning(f"[{session_id}] SAFETY REFUSAL: Prohibited intent detected at Iteration 0.")
             self.memory.add_turn(session_id, "user", user_query)
             self.memory.add_turn(session_id, "assistant", self.HARD_REFUSAL_MESSAGE)
             
@@ -151,6 +163,7 @@ CRITICAL RULES:
                 "response": self.HARD_REFUSAL_MESSAGE,
                 "escalation_required": True,
                 "iterations": 0,
+                "replan_count": 0,
                 "tool_calls": tool_calls,
             }
 
@@ -161,13 +174,56 @@ CRITICAL RULES:
         observation = ""
         context_snippets = []
 
-        # 2. Multi-Step Execution Loop
+        # --- MULTI-STEP RE-PLANNING EXECUTION LOOP ---        
         while iteration < self.max_iterations:
             iteration += 1
             logger.info(f"[{session_id}] PLAN: Iteration {iteration}/{self.max_iterations}")
 
-            plan = self._plan_next_step(user_query, session_history, observation, student_id)
+            # PLAN: Dynamically select action based on current state & intermediate observations
+            plan = self._plan_next_step(user_query, session_history, observation, student_id, iteration, session_id)
 
+            # STOP Condition: Final synthesis
+            if plan["action"] == "FINAL_SYNTHESIS":
+                logger.info(f"[{session_id}] STOP/SYNTHESIZE: Formulating grounded final response...")
+                m_start = time.time()
+                final_answer = self._synthesize_response(
+                    user_query=user_query,
+                    history=session_history,
+                    context=context_snippets,
+                    observation=observation,
+                    session_id=session_id,
+                )
+                m_latency = (time.time() - m_start) * 1000
+                self.memory.add_turn(session_id, "assistant", final_answer)
+
+                prompt_approx = (len(user_query) + len(observation) + len(str(session_history))) // 4
+                comp_approx = len(final_answer) // 4
+                ticket_created = any(
+                    call["tool"] == "create_support_ticket" and call["status"] == "ok"
+                    for call in tool_calls
+                )
+                tool_failed = any(call["status"] == "error" for call in tool_calls)
+
+                turn_metrics.status = "tool_error" if tool_failed else "success"
+                turn_metrics.model_latency_ms = m_latency
+                turn_metrics.tool_latency_ms = tool_start_total * 1000
+                turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
+                turn_metrics.prompt_tokens = prompt_approx
+                turn_metrics.completion_tokens = comp_approx
+                turn_metrics.total_tokens = prompt_approx + comp_approx
+                turn_metrics.tools_invoked = tools_used
+                self.telemetry.record_turn(turn_metrics)
+
+                return {
+                    "status": "success" if not tool_failed else "recovered_with_notice",
+                    "response": final_answer,
+                    "escalation_required": ticket_created,
+                    "iterations": iteration,
+                    "replan_count": replan_count,
+                    "tool_calls": tool_calls,
+                }     
+                        
+            # ACT Phase 1: RAG Retrieval
             if plan["action"] == "RETRIEVE_KNOWLEDGE":
                 logger.info(f"[{session_id}] ACT: Retrieving RAG knowledge chunks...")
                 self._emit(on_event, {"event": "tool_start", "tool": "retriever"})
@@ -196,7 +252,10 @@ CRITICAL RULES:
                 tool_calls.append(self._finish_tool_call(
                     on_event, "retriever", {"query": plan["query"]}, retrieval_result, elapsed
                 ))
-
+                logger.info(f"[{session_id}] OBSERVE: Policy chunks retrieved. Proceeding to next iteration...")
+                continue
+                
+            # ACT Phase 2: Deterministic Tools
             elif plan["action"] == "EXECUTE_TOOL":
                 tool_name = plan["tool_name"]
                 tool_params = plan["tool_params"]
@@ -212,61 +271,22 @@ CRITICAL RULES:
                     on_event, tool_name, tool_params, tool_result, elapsed
                 ))
 
+                # OBSERVE & RE-PLAN EVALUATION
                 observation = f"Tool Result: {json.dumps(tool_result)}"
-                logger.info(f"[{session_id}] OBSERVE: Tool execution completed.")
+                logger.info(f"[{session_id}] OBSERVE: Evaluated observation from '{tool_name}'.")
 
-            elif plan["action"] == "FINAL_SYNTHESIS":
-                logger.info(f"[{session_id}] REVISE: Synthesizing final response...")
-                m_start = time.time()
-                final_answer = self._synthesize_response(
-                    user_query=user_query,
-                    history=session_history,
-                    context=context_snippets,
-                    observation=observation,
-                    session_id=session_id,
-                )
-                m_latency = (time.time() - m_start) * 1000
-                self.memory.add_turn(session_id, "assistant", final_answer)
+                # Detect failed precondition or parameter absence to trigger re-planning
+                failed_precondition = (
+                    isinstance(tool_result, dict) and "error" in tool_result
+                ) or (isinstance(tool_result, list) and len(tool_result) == 0)
 
-                # Collect prompt and response token estimates
-                prompt_approx = (len(user_query) + len(observation) + len(str(session_history))) // 4
-                comp_approx = len(final_answer) // 4
-
-                ticket_created = any(
-                    call["tool"] == "create_support_ticket" and call["status"] == "ok"
-                    for call in tool_calls
-                )
-                tool_failed = any(call["status"] == "error" for call in tool_calls)
-                turn_status = "tool_error" if tool_failed else "success"
-
-                turn_metrics.status = turn_status
-                turn_metrics.model_latency_ms = m_latency
-                turn_metrics.tool_latency_ms = tool_start_total * 1000
-                turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
-                turn_metrics.prompt_tokens = prompt_approx
-                turn_metrics.completion_tokens = comp_approx
-                turn_metrics.total_tokens = prompt_approx + comp_approx
-                turn_metrics.tools_invoked = tools_used
-                self.telemetry.record_turn(turn_metrics)
-
-                return {
-                    "status": turn_status,
-                    "response": final_answer,
-                    "escalation_required": ticket_created,
-                    "iterations": iteration,
-                    "tool_calls": tool_calls,
-                }
-
-        # Safe loop termination fallback
-        fallback = "I was unable to resolve your inquiry within the allowed execution cycles. Escalating to staff."
-        self.memory.add_turn(session_id, "assistant", fallback)
-        return {
-            "status": "max_iterations_reached",
-            "response": fallback,
-            "escalation_required": True,
-            "iterations": iteration,
-            "tool_calls": tool_calls,
-        }
+                if failed_precondition and iteration < self.max_iterations:
+                    replan_count += 1
+                    logger.warning(
+                        f"[{session_id}] REPLAN: Precondition failed or result empty. Initiating re-plan step {replan_count}."
+                    )
+                continue
+            
 
     @staticmethod
     def _ticket_summary(query: str) -> str:
@@ -281,43 +301,112 @@ CRITICAL RULES:
         history: List[Dict],
         observation: str,
         student_id: str = DEFAULT_STUDENT_ID,
+        iteration: int = 1,
+        session_id: str = "",
     ) -> Dict[str, Any]:
+        
+        # Goal-directed action selector with recovery and re-planning capabilities.
+        # Dynamically evaluates intermediate observations against preconditions.
+
         query_lower = query.lower()
 
-        # Route 1: Timetable inquiry
-        if ("schedule" in query_lower or "timetable" in query_lower or "lecture" in query_lower) and "Tool Result" not in observation:
-            course_match = COURSE_CODE_IN_QUERY.search(query)
-            return {
-                "action": "EXECUTE_TOOL",
-                "tool_name": "get_course_schedule",
-                "tool_params": {
-                    "student_id": student_id,
-                    "course_code": course_match.group(0).upper() if course_match else None,
-                }
-            }
+        # REPLAN BRANCH: Previous timetable lookup returned an error or empty result
+        if "Tool Result" in observation:
+            try:
+                raw_json = observation.replace("Tool Result: ", "")
+                data = json.loads(raw_json)
 
-        # Route 2: Support ticket creation (strict 6-argument schema & lowercase enums)
+                # Recover from empty timetable or course lookup error -> Pivot to policy check
+                if (isinstance(data, dict) and "error" in data) or (isinstance(data, list) and len(data) == 0):
+                    if iteration < self.max_iterations and "Policy Evidence" not in observation:
+                        logger.info("REPLAN TRIGGER: Timetable unresolved. Re-planning towards Policy RAG...")
+                        return {"action": "RETRIEVE_KNOWLEDGE", "query": f"retake course registration policy for {query}"}
+                    
+                    # If already re-planned or at max limit, route to escalation ticket
+                    return {
+                        "action": "EXECUTE_TOOL",
+                        "tool_name": "get_course_schedule",
+                        "tool_params": {
+                            "student_id": student_id,
+                            "summary": f"Unresolved Schedule Inquiry: {self._ticket_summary(query)}",
+                            "original_message": query,
+                            "category": TicketCategory.ACADEMIC.value,
+                            "priority": TicketPriority.MEDIUM.value,
+                            "student_confirmed": True,
+                        }
+                    }
+            except Exception:
+                pass
+            
+            # If observation is valid and satisfied, stop and synthesize
+            return {"action": "FINAL_SYNTHESIS"}
+        
+        # If policy evidence is already retrieved, formulate response
+        if "Policy Evidence" in observation:
+            return {"action": "FINAL_SYNTHESIS"}
+        
+        # INITIAL PLAN ROUTE 1: Schedule or Timetable query
+        if any(kw in query_lower for kw in ("schedule", "timetable", "lecture", "class", "clash", "retake")):
+            # 1. Search current query
+            course_match = COURSE_CODE_IN_QUERY.search(query)
+
+            # 2. Check passed history list
+            if not course_match and history:
+                for past_turn in reversed(history):
+                    text = json.dumps(past_turn) if isinstance(past_turn, (dict, list)) else str(past_turn)
+                    course_match = COURSE_CODE_IN_QUERY.search(text)
+                    if course_match:
+                        break
+
+# 3. C      # 3. Check full memory session directly (bypassing sliding-window cutoff)
+            if not course_match and hasattr(self, "memory"):
+                # Check all common attribute names used in ConversationMemory
+                raw_session = None
+                if hasattr(self.memory, "sessions") and isinstance(self.memory.sessions, dict):
+                    raw_session = self.memory.sessions.get(session_id if 'session_id' in locals() else "")
+                elif hasattr(self.memory, "_sessions") and isinstance(self.memory._sessions, dict):
+                    raw_session = self.memory._sessions.get(session_id if 'session_id' in locals() else "")
+                elif hasattr(self.memory, "get_all_turns"):
+                    raw_session = self.memory.get_all_turns(session_id)
+
+                if raw_session:
+                    course_match = COURSE_CODE_IN_QUERY.search(json.dumps(raw_session) if isinstance(raw_session, (dict, list)) else str(raw_session))
+
+            # 4. If still not found, search the entire memory manager object text
+            if not course_match and hasattr(self, "memory"):
+                try:
+                    for attr in ("history", "messages", "turns", "sessions", "_sessions"):
+                        val = getattr(self.memory, attr, None)
+                        if val:
+                            m = COURSE_CODE_IN_QUERY.search(str(val))
+                            if m:
+                                course_match = m
+                                break
+                except Exception:
+                    pass
+
+            # If found, execute timetable tool!
+            if course_match:
+                return {
+                    "action": "EXECUTE_TOOL",
+                    "tool_name": "get_course_schedule",
+                    "tool_params": {
+                        "student_id": student_id,
+                        "course_code": course_match.group(0).upper(),
+                    },
+                }
+
+            logger.info("PRECONDITION CHECK: No course code in query or history. Routing to policy retrieval.")
+            return {"action": "RETRIEVE_KNOWLEDGE", "query": query}
+            
+            
+        # INITIAL PLAN ROUTE 2: Explicit Support Ticket
         explicit_ticket_request = (
-            (
-                "ticket" in query_lower
-                and any(
-                    verb in query_lower
-                    for verb in (
-                        "create",
-                        "open",
-                        "submit",
-                        "raise",
-                    )
-                )
-            )
+            ("ticket" in query_lower and any(v in query_lower for v in ("create", "open", "submit", "raise")))
             or "escalate" in query_lower
             or "lodge" in query_lower
         )
-
-        if (
-            explicit_ticket_request
-            and "Tool Result" not in observation
-        ):
+        if explicit_ticket_request:
             return {
                 "action": "EXECUTE_TOOL",
                 "tool_name": "create_support_ticket",
@@ -327,15 +416,16 @@ CRITICAL RULES:
                     "original_message": query,
                     "category": TicketCategory.ADMINISTRATIVE.value,
                     "priority": TicketPriority.MEDIUM.value,
-                    "student_confirmed": True
-                }
+                    "student_confirmed": True,
+                },
             }
-
-        # Route 3: RAG Policy Retrieval
+            
+            
+        # INITIAL PLAN ROUTE 3: University Policy Inquiry
         if not observation:
             return {"action": "RETRIEVE_KNOWLEDGE", "query": query}
 
-        # Route 4: Final response synthesis
+        # Default STOP condition
         return {"action": "FINAL_SYNTHESIS"}
 
     @staticmethod
@@ -405,7 +495,7 @@ Synthesize a direct, grounded answer adhering to the system instructions.
                 data = json.loads(raw_tool)
                 if isinstance(data, list) and data:
                     entries = [
-                        f"• **{item.get('day', '').capitalize()}** ({item.get('start_time')} - {item.get('end_time')}) in **{item.get('room', 'TBD')}** — {item.get('instructor', 'Faculty')} ({item.get('course_name')})"
+                        f"• **{item.get('day', '').capitalize()}** ({item.get('start_time')} - {item.get('end_time')}) in **{item.get('room', 'TBD')}** — {item.get('instructor', 'Faculty')} ({item.get('course_code')}: {item.get('course_name')})"
                         for item in data
                     ]
                     return f"Here is your verified lecture timetable:\n\n" + "\n".join(entries)
@@ -424,8 +514,10 @@ Synthesize a direct, grounded answer adhering to the system instructions.
             return f"Tool Execution Result:\n{raw_tool}"
 
         if context:
-            citations = [f"[{c.get('citation', c.get('doc', 'University Policy'))}]" for c in context]
-            return f"{context[0].get('text')}\n\n" + "\n".join(citations)
+            first = context[0]
+            citation_str = first.get("citation") or f"[Source: {first.get('doc', 'University Policy')}]"
+            # Format: <Text> <Citation> so line 0 ends with the citation
+            return f"{first.get('text')} {citation_str}"
 
         return (
             "I cannot confirm this information from current official records. "
