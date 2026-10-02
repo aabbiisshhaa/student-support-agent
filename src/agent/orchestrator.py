@@ -14,12 +14,8 @@ from src.agent.memory import ConversationMemory
 from src.baseline_model import GeminiModel
 from src.rag.retriever import EmbedderInfo, Retriever
 from src.telemetry.tracker import TelemetryTracker, TurnTelemetry
-from src.tools.ticket_tool import (
-    TicketCategory,
-    TicketPriority,
-    create_support_ticket,
-)
-from src.tools.timetable_tool import get_course_schedule
+from src.tools import registry as tool_registry
+from src.tools.ticket_tool import TicketCategory, TicketPriority
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -661,54 +657,49 @@ CRITICAL RULES:
             getattr(value, "value", value)
         ).strip().lower()
 
+    @staticmethod
+    def _build_tool_params(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Translate a plan's tool_params into the registry's exact argument shape."""
+
+        if tool_name == "get_course_schedule":
+            return {
+                "student_id": params.get("student_id", DEFAULT_STUDENT_ID),
+                "course_code": params.get("course_code"),
+            }
+
+        if tool_name == "create_support_ticket":
+            return {
+                "student_id": params.get("student_id", DEFAULT_STUDENT_ID),
+                "summary": params.get("summary", "Support ticket request"),
+                "original_message": params.get(
+                    "original_message", "Support ticket request"
+                ),
+                "category": SupportAgentOrchestrator._lowercase_enum(
+                    params.get("category", TicketCategory.ADMINISTRATIVE)
+                ),
+                "priority": SupportAgentOrchestrator._lowercase_enum(
+                    params.get("priority", TicketPriority.MEDIUM)
+                ),
+                "student_confirmed": params.get("student_confirmed", True),
+            }
+
+        return dict(params)
+
     def _dispatch_tool(
         self,
         tool_name: str,
         params: Dict[str, Any],
     ) -> Any:
-        """Execute only registered deterministic tools."""
+        """Execute only tools on the registry's execution whitelist."""
 
         try:
-            if tool_name == "get_course_schedule":
-                return get_course_schedule(
-                    student_id=params.get(
-                        "student_id",
-                        DEFAULT_STUDENT_ID,
-                    ),
-                    course_code=params.get("course_code"),
-                )
+            tool_params = self._build_tool_params(tool_name, params)
+            return tool_registry.execute(tool_name, tool_params)
 
-            if tool_name == "create_support_ticket":
-                return create_support_ticket(
-                    student_id=params.get(
-                        "student_id",
-                        DEFAULT_STUDENT_ID,
-                    ),
-                    summary=params.get(
-                        "summary",
-                        "Support ticket request",
-                    ),
-                    original_message=params.get(
-                        "original_message",
-                        "Support ticket request",
-                    ),
-                    category=self._lowercase_enum(
-                        params.get(
-                            "category",
-                            TicketCategory.ADMINISTRATIVE,
-                        )
-                    ),
-                    priority=self._lowercase_enum(
-                        params.get(
-                            "priority",
-                            TicketPriority.MEDIUM,
-                        )
-                    ),
-                    student_confirmed=params.get(
-                        "student_confirmed",
-                        True,
-                    ),
-                )
+        except tool_registry.UnknownToolError:
+            return {
+                "error": f"Tool '{tool_name}' not recognized."
+            }
 
         except Exception as error:
             logger.error(
@@ -719,10 +710,6 @@ CRITICAL RULES:
             return {
                 "error": str(error),
             }
-
-        return {
-            "error": f"Tool '{tool_name}' not recognized."
-        }
 
     @staticmethod
     def _format_citation(value: Any) -> str:

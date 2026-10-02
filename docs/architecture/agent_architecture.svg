@@ -1,0 +1,152 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1960" height="1824" viewBox="0 0 1960 1824" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect x="0" y="0" width="1960" height="1824" fill="#ffffff"/>
+
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#8a8f98"/>
+  </marker>
+  <marker id="arrow-crimson" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#b9453f"/>
+  </marker>
+</defs>
+
+<text x="980.0" y="40" font-size="25" font-weight="700" fill="#111827" text-anchor="middle">University Student-Support Case Agent — Week 5 Agent Architecture</text>
+<text x="980.0" y="63" font-size="14" fill="#6b7280" text-anchor="middle">Course Retake &amp; Timetable Conflict Resolution workflow · Sense → Plan → Act → Observe → Re-plan / Stop · AI Safety Impact: Deterministic Code</text>
+<rect x="40" y="92" width="6" height="36" fill="#2f7a97"/>
+<text x="56" y="108" font-size="16.5" font-weight="700" fill="#111827">1  BOUNDED CONTROL LOOP</text>
+<text x="56" y="125" font-size="12" fill="#6b7280">src/agent/orchestrator.py + src/agent/state.py (AgentStep, ALLOWED_STEP_TRANSITIONS) · max_iterations=5 · max_replans=2 · retries/tool=1</text>
+<rect x="640.0" y="156" width="680" height="100" rx="8" fill="#123b4a" stroke="#2f7a97" stroke-width="1.5"/>
+<text x="980.0" y="191.0" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">SENSE</text>
+<text x="980.0" y="213.0" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">Validate session_id, student_id (session-bound), user_query (≤ 2000 chars), retake_course_code</text>
+<text x="980.0" y="232.0" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">Prohibited-intent screen runs here, before any tool call (PROHIBITED_INTENTS)</text>
+<rect x="700.0" y="298" width="560" height="96" rx="8" fill="#5a2233" stroke="#a8536c" stroke-width="1.5"/>
+<text x="980.0" y="331.0" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">PLAN — _plan_next_step()</text>
+<text x="980.0" y="353.0" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">Chooses exactly one action: RETRIEVE_KNOWLEDGE · EXECUTE_TOOL ·</text>
+<text x="980.0" y="372.0" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">FINAL_SYNTHESIS · ESCALATE</text>
+<rect x="230.0" y="436" width="1500" height="322" rx="8" fill="#163c28" stroke="#3a8a5c" stroke-width="1.5"/>
+<text x="980.0" y="463.5" font-size="15.5" font-weight="700" fill="#ffffff" text-anchor="middle">ACT — tool_registry.execute(tool_name, params)</text>
+<text x="980.0" y="486.0" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">src/tools/registry.py — execution allow-list + parameter schema boundary. Only the tools below are reachable from a plan.</text>
+<rect x="270.0" y="502" width="457.3333333333333" height="76" rx="6" fill="#0f3a2a" stroke="#3a8a5c" stroke-width="1.3"/>
+<text x="498.66666666666663" y="527.0" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">T1 · retriever.retrieve()</text>
+<text x="498.66666666666663" y="545.5" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">RETRIEVE_KNOWLEDGE · read-only</text>
+<text x="498.66666666666663" y="561.8" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">top_k=2, approved corpus only</text>
+<rect x="751.3333333333333" y="502" width="457.3333333333333" height="76" rx="6" fill="#0f3a2a" stroke="#3a8a5c" stroke-width="1.3"/>
+<text x="979.9999999999999" y="527.0" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">T2 · get_course_schedule()</text>
+<text x="979.9999999999999" y="545.5" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">EXECUTE_TOOL · read-only</text>
+<text x="979.9999999999999" y="561.8" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">own student_id only (Rule I-1)</text>
+<rect x="1232.6666666666665" y="502" width="457.3333333333333" height="76" rx="6" fill="#0f3a2a" stroke="#3a8a5c" stroke-width="1.3"/>
+<text x="1461.3333333333333" y="527.0" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">T3 · get_course_offering()</text>
+<text x="1461.3333333333333" y="545.5" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">EXECUTE_TOOL · read-only</text>
+<text x="1461.3333333333333" y="561.8" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">planned — same schema style as T2</text>
+<rect x="270.0" y="598" width="457.3333333333333" height="76" rx="6" fill="#17314a" stroke="#2f7a97" stroke-width="1.3"/>
+<text x="498.66666666666663" y="623.0" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">T4 · detect_schedule_conflicts()</text>
+<text x="498.66666666666663" y="641.5" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">runs inside OBSERVE, not planner-selected</text>
+<text x="498.66666666666663" y="657.8" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">pure function, after T2+T3 ok</text>
+<rect x="751.3333333333333" y="598" width="457.3333333333333" height="76" rx="6" fill="#5c1b1b" stroke="#d2665f" stroke-width="1.3"/>
+<text x="979.9999999999999" y="623.0" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">T5 · create_support_ticket() — WRITE</text>
+<text x="979.9999999999999" y="641.5" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">only tool with side effects (R-T1)</text>
+<text x="979.9999999999999" y="657.8" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">needs student_confirmed==true · final action only</text>
+<rect x="1232.6666666666665" y="598" width="457.3333333333333" height="76" rx="6" fill="#0f3a2a" stroke="#3a8a5c" stroke-width="1.3"/>
+<text x="1461.3333333333333" y="623.0" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">T6 · final response synthesis</text>
+<text x="1461.3333333333333" y="641.5" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">FINAL_SYNTHESIS · Gemini or deterministic formatter</text>
+<text x="1461.3333333333333" y="657.8" font-size="10.8" font-weight="400" fill="#dfe2e6" text-anchor="middle">grounded only in evidence + tool results</text>
+<rect x="270.0" y="694" width="1420" height="54" rx="6" fill="#3a1414" stroke="#b9453f" stroke-width="1.3" stroke-dasharray="5,3"/>
+<text x="980.0" y="724.2" font-size="12.5" font-weight="700" fill="#ffffff" text-anchor="middle">✗ Any unlisted tool name → {"error": "Tool '&lt;name&gt;' not recognized."} — rejected before execution, counted as a FAILED step (S11 if repeated)</text>
+<rect x="380.0" y="814" width="480" height="96" rx="8" fill="#123b4a" stroke="#2f7a97" stroke-width="1.5"/>
+<text x="620.0" y="847.0" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">OBSERVE</text>
+<text x="620.0" y="869.0" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">Records the outcome · runs T4 once both schedules exist · checks</text>
+<text x="620.0" y="888.0" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">G1–G6 and stop conditions</text>
+<rect x="1100.0" y="814" width="480" height="96" rx="8" fill="#6b4318" stroke="#c78a36" stroke-width="1.5"/>
+<text x="1340.0" y="847.0" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">REPLAN</text>
+<text x="1340.0" y="869.0" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">Retries a failed read-only tool (T1–T3) once with the same</text>
+<text x="1340.0" y="888.0" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">arguments (R-6); max_replans=2</text>
+<rect x="700.0" y="972" width="560" height="88" rx="8" fill="#2b2f36" stroke="#6b7280" stroke-width="1.5"/>
+<text x="980.0" y="1010.5" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">STOP — AgentState.finish()</text>
+<text x="980.0" y="1032.5" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">Terminal · the state is sealed · no further plan, act or observe is possible</text>
+<path d="M980.0,256 L980.0,298 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="940.16125" y="261.5" width="79.67750000000001" height="18.5" fill="#ffffff" opacity="0.95"/>
+<text x="980.0" y="274" font-size="11.5" fill="#374151" text-anchor="middle" font-weight="600">valid input</text>
+<path d="M980.0,394 L980.0,436 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="872.48375" y="399.5" width="215.0325" height="18.5" fill="#ffffff" opacity="0.95"/>
+<text x="980.0" y="412" font-size="11.5" fill="#374151" text-anchor="middle" font-weight="600">RETRIEVE_KNOWLEDGE / EXECUTE_TOOL</text>
+<path d="M980.0,758 L980.0,814 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="924.78" y="763.5" width="110.44000000000001" height="18.5" fill="#ffffff" opacity="0.95"/>
+<text x="980.0" y="776" font-size="11.5" fill="#374151" text-anchor="middle" font-weight="600">tool observation</text>
+<path d="M860.0,862.0 L1100.0,862.0 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="869.4075" y="837.5" width="221.185" height="18.5" fill="#ffffff" opacity="0.95"/>
+<text x="980.0" y="850.0" font-size="11.5" fill="#374151" text-anchor="middle" font-weight="600">tool failed · retry eligible (R-6)</text>
+<path d="M620.0,910 L620.0,1016.0 L700.0,1016.0 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="472.49249999999995" y="915.5" width="295.01500000000004" height="18.5" fill="#ffffff" opacity="0.95"/>
+<text x="620.0" y="928" font-size="11.5" fill="#374151" text-anchor="middle" font-weight="600">G1–G6 met, no failures (or S4 iteration limit)</text>
+<path d="M1340.0,910 L1340.0,1016.0 L1260.0,1016.0 " fill="none" stroke="#b9453f" stroke-width="2" stroke-dasharray="7,5" marker-end="url(#arrow-crimson)"/>
+<rect x="1250.94125" y="915.5" width="178.1175" height="18.5" fill="#ffffff" opacity="0.95"/>
+<text x="1340.0" y="928" font-size="11.5" fill="#8a2a24" text-anchor="middle" font-weight="600">2nd failure → escalate (S5)</text>
+<path d="M380.0,834 L170.0,834 L170.0,346.0 L700.0,346.0 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="176.71249999999998" y="809.5" width="196.57500000000002" height="18.5" fill="#ffffff" opacity="0.95"/>
+<text x="275.0" y="822" font-size="11.5" fill="#374151" text-anchor="middle" font-weight="600">continue · iteration_count &lt; 5</text>
+<path d="M640.0,206.0 L90.0,206.0 L90.0,1016.0 L700.0,1016.0 " fill="none" stroke="#b9453f" stroke-width="2" stroke-dasharray="7,5" marker-end="url(#arrow-crimson)"/>
+<rect x="208.26375" y="181.5" width="313.4725" height="18.5" fill="#ffffff" opacity="0.95"/>
+<text x="365.0" y="194.0" font-size="11.5" fill="#8a2a24" text-anchor="middle" font-weight="600">S1 prohibited intent — iteration 0, no tool calls</text>
+<path d="M1580.0,836 L1790.0,836 L1790.0,736 L1730.0,736 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="1608.24625" y="811.5" width="153.50750000000002" height="18.5" fill="#ffffff" opacity="0.95"/>
+<text x="1685.0" y="824" font-size="11.5" fill="#374151" text-anchor="middle" font-weight="600">retry same tool · max 1</text>
+<path d="M1260.0,346.0 L1880.0,346.0 L1880.0,1016.0 L1260.0,1016.0 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="1468.63625" y="321.5" width="202.72750000000002" height="18.5" fill="#ffffff" opacity="0.95"/>
+<text x="1570.0" y="334.0" font-size="11.5" fill="#374151" text-anchor="middle" font-weight="600">FINAL_SYNTHESIS (T6) / ESCALATE</text>
+<rect x="40" y="1090" width="6" height="36" fill="#2f7a97"/>
+<text x="56" y="1106" font-size="16.5" font-weight="700" fill="#111827">2  TERMINAL STATE TRANSITIONS — AgentStatus</text>
+<text x="56" y="1123" font-size="12" fill="#6b7280">running is the only non-terminal status · every other transition out of a terminal status is invalid (StateSealedError)</text>
+<rect x="230.0" y="1146" width="460" height="80" rx="8" fill="#163c28" stroke="#3a8a5c" stroke-width="1.5"/>
+<text x="460.0" y="1180.5" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">SUCCESS</text>
+<text x="460.0" y="1202.5" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">G1–G6 all met · zero tool failures (N1, N2)</text>
+<rect x="750.0" y="1146" width="460" height="80" rx="8" fill="#6b4318" stroke="#c78a36" stroke-width="1.5"/>
+<text x="980.0" y="1180.5" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">RECOVERED</text>
+<text x="980.0" y="1202.5" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">≥ 1 tool failure, retry or fallback worked (N3)</text>
+<rect x="1270.0" y="1146" width="460" height="80" rx="8" fill="#5c1b1b" stroke="#b9453f" stroke-width="1.5"/>
+<text x="1500.0" y="1180.5" font-size="15" font-weight="700" fill="#ffffff" text-anchor="middle">ESCALATED</text>
+<text x="1500.0" y="1202.5" font-size="12.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">Stop condition S1–S11 fired · human must act (H-3)</text>
+<path d="M980.0,1060 L980.0,1096 L460.0,1096 L460.0,1146 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M980.0,1060 L980.0,1096 L980.0,1096 L980.0,1146 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M980.0,1060 L980.0,1096 L1500.0,1096 L1500.0,1146 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="270.0" y="1280" width="900.0" height="72" rx="8" fill="#2e1f45" stroke="#7b5ea7" stroke-width="1.5"/>
+<text x="720.0" y="1310.2" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="middle">Student receives the grounded, cited retake report (T6)</text>
+<text x="720.0" y="1330.8" font-size="11.5" font-weight="400" fill="#dfe2e6" text-anchor="middle">Citation format: [Nakawa University Academic Handbook 2025/2026, s. 7, p. 4]</text>
+<path d="M460.0,1226 L460.0,1280 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M980.0,1226 L980.0,1280 " fill="none" stroke="#8a8f98" stroke-width="2" marker-end="url(#arrow)"/>
+<rect x="40" y="1398" width="6" height="36" fill="#2f7a97"/>
+<text x="56" y="1414" font-size="16.5" font-weight="700" fill="#111827">3  ADMINISTRATIVE ESCALATION ROUTING — human hand-off</text>
+<text x="56" y="1431" font-size="12" fill="#6b7280">Every ESCALATED run routes to exactly one staff queue, carrying the full AgentState (plan_history + tool_observations) per H-2</text>
+<rect x="40.0" y="1450" width="452.0" height="172" rx="8" fill="#2e1f45" stroke="#7b5ea7" stroke-width="1.5"/>
+<text x="56.0" y="1504.2" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="start">General Administration Queue</text>
+<text x="56.0" y="1524.8" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">Department Administrator</text>
+<text x="56.0" y="1542.2" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S1 · prohibited intent</text>
+<text x="56.0" y="1559.8" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S4 · iteration limit reached</text>
+<text x="56.0" y="1577.2" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S11 · unregistered tool, repeated</text>
+<rect x="516.0" y="1450" width="452.0" height="172" rx="8" fill="#2e1f45" stroke="#7b5ea7" stroke-width="1.5"/>
+<text x="532.0" y="1486.8" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="start">Timetable &amp; Registration Queue</text>
+<text x="532.0" y="1507.2" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">Faculty Registrar / Head of Department</text>
+<text x="532.0" y="1524.8" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S2 · clash, no clash-free option</text>
+<text x="532.0" y="1542.2" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S5 · same tool failed twice / student not found</text>
+<text x="532.0" y="1559.8" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S6 · missing or invalid course code</text>
+<text x="532.0" y="1577.2" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S8 · admin-error clash (Form AR/7)</text>
+<text x="532.0" y="1594.8" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S9 · outside registration window</text>
+<rect x="992.0" y="1450" width="452.0" height="172" rx="8" fill="#2e1f45" stroke="#7b5ea7" stroke-width="1.5"/>
+<text x="1008.0" y="1513.0" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="start">Academic Policy Queue</text>
+<text x="1008.0" y="1533.5" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">Academic Policy reviewers</text>
+<text x="1008.0" y="1551.0" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S3 · 4th attempt — discontinuation risk</text>
+<text x="1008.0" y="1568.5" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S7 · no policy evidence found</text>
+<rect x="1468.0" y="1450" width="452.0" height="172" rx="8" fill="#2e1f45" stroke="#7b5ea7" stroke-width="1.5"/>
+<text x="1484.0" y="1521.8" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="start">General Support Queue</text>
+<text x="1484.0" y="1542.2" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">Student Support Services</text>
+<text x="1484.0" y="1559.8" font-size="11" font-weight="400" fill="#d9cdee" text-anchor="start">S10 · distress / urgency cues</text>
+<path d="M1500.0,1226 L1500.0,1420 L266.0,1420 L266.0,1450 " fill="none" stroke="#b9453f" stroke-width="2" marker-end="url(#arrow-crimson)"/>
+<path d="M1500.0,1226 L1500.0,1420 L742.0,1420 L742.0,1450 " fill="none" stroke="#b9453f" stroke-width="2" marker-end="url(#arrow-crimson)"/>
+<path d="M1500.0,1226 L1500.0,1420 L1218.0,1420 L1218.0,1450 " fill="none" stroke="#b9453f" stroke-width="2" marker-end="url(#arrow-crimson)"/>
+<path d="M1500.0,1226 L1500.0,1420 L1694.0,1420 L1694.0,1450 " fill="none" stroke="#b9453f" stroke-width="2" marker-end="url(#arrow-crimson)"/>
+<rect x="40" y="1656" width="1880" height="110" rx="8" fill="#3f2a12" stroke="#a9742e" stroke-width="1.5"/>
+<text x="58" y="1686.5" font-size="13.5" font-weight="700" fill="#ffffff" text-anchor="start">Hand-off rules</text>
+<text x="58" y="1707.0" font-size="12" font-weight="400" fill="#f1e7d2" text-anchor="start">H-1 confirmation gate — a ticket is written only when student_confirmed == true; otherwise the run ends “escalated, awaiting confirmation”.</text>
+<text x="58" y="1725.5" font-size="12" font-weight="400" fill="#f1e7d2" text-anchor="start">H-3 honest status — an escalated run never claims success.</text>
+<text x="58" y="1744.0" font-size="12" font-weight="400" fill="#f1e7d2" text-anchor="start">H-4 no unilateral action — the agent only routes to a queue; it never changes a record itself.</text>
+<text x="980.0" y="1800" font-size="11.5" fill="#6b7280" text-anchor="middle">Source of truth: docs/architecture/agent_task_contract.md (Sections 4–7) · src/agent/state.py · src/tools/registry.py · Week 5 (28 Sep – 2 Oct 2026)</text>
+</svg>
