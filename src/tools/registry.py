@@ -5,6 +5,8 @@ from typing import Any, Callable, Mapping
 
 from src.tools.ticket_tool import TicketCategory, TicketPriority, create_support_ticket
 from src.tools.timetable_tool import get_course_schedule
+from src.tools.policy_tool import search_academic_policy
+from src.tools.escalation_tool import escalate_to_human_admin
 
 
 class ToolRegistryError(Exception):
@@ -139,5 +141,34 @@ register(
         },
         mutates_database=True,
         confirmation_param="student_confirmed",
+    )
+)
+
+register(
+    ToolSpec(
+        name="search_academic_policy",
+        handler=search_academic_policy,
+        params={
+            "query": ParamSpec(types=(str,), required=True),
+            "top_k": ParamSpec(types=(int,), required=False),
+        },
+        mutates_database=False,
+    )
+)
+
+register(
+    ToolSpec(
+        name="escalate_to_human_admin",
+        handler=escalate_to_human_admin,
+        params={
+            "session_id": ParamSpec(types=(str,), required=True),
+            "student_id": ParamSpec(types=(str,), required=True),
+            "reason": ParamSpec(types=(str,), required=True),
+            "conversation_history": ParamSpec(types=(list,), required=True),
+            "iteration_count": ParamSpec(types=(int,), required=True),
+            "max_allowed_iterations": ParamSpec(types=(int,), required=True),
+            "escalation_target": ParamSpec(types=(str,), required=False),
+        },
+        mutates_database=False,
     )
 )

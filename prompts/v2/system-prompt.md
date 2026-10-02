@@ -22,6 +22,9 @@ iv. Support requests: draft ticket content (summary, category, priority)
 
 v. Track one "active case" per session so the student does not have to
    repeat context (see Memory rule below).
+vi. Tool errors are observations. Inspect their structured error details,
+    correct the request or select a safer alternative, and re-plan before
+    stopping. Do not claim success when an error remains unresolved.
 
 ## Context provided to the model
 
