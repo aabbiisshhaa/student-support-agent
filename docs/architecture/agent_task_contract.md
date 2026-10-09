@@ -45,14 +45,14 @@ A single prompt cannot do this safely. Each step depends on the observation from
 
 A run reaches `success` only when **all** of the following are true:
 
-| # | Criterion | Checked by |
-|---|---|---|
-| G1 | At least one retake-policy passage was retrieved, and the response cites it in the corpus citation format, e.g. `[Nakawa University Academic Handbook 2025/2026, s. 7 (Retakes and Progression), p. 4]`. | Orchestrator: `context_snippets` is not empty |
-| G2 | The student's current timetable was read successfully by `get_course_schedule`. | `tool_observations` entry with `status == "ok"` |
-| G3 | The retake course's sessions were read successfully. | `tool_observations` entry with `status == "ok"` |
-| G4 | Conflicts were calculated by the deterministic overlap function, not by the model. | `detect_schedule_conflicts` output stored in state |
-| G5 | The response states only facts present in G1–G4. | Grounding rule in the system prompt and the evaluation suite |
-| G6 | No stop or escalation condition from Section 7 was triggered. | `AgentState.status` |
+| #   | Criterion                                                                                                                                                                                                | Checked by                                                   |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| G1  | At least one retake-policy passage was retrieved, and the response cites it in the corpus citation format, e.g. `[Nakawa University Academic Handbook 2025/2026, s. 7 (Retakes and Progression), p. 4]`. | Orchestrator: `context_snippets` is not empty                |
+| G2  | The student's current timetable was read successfully by `get_course_schedule`.                                                                                                                          | `tool_observations` entry with `status == "ok"`              |
+| G3  | The retake course's sessions were read successfully.                                                                                                                                                     | `tool_observations` entry with `status == "ok"`              |
+| G4  | Conflicts were calculated by the deterministic overlap function, not by the model.                                                                                                                       | `detect_schedule_conflicts` output stored in state           |
+| G5  | The response states only facts present in G1–G4.                                                                                                                                                         | Grounding rule in the system prompt and the evaluation suite |
+| G6  | No stop or escalation condition from Section 7 was triggered.                                                                                                                                            | `AgentState.status`                                          |
 
 ### 2.2 Out of scope (non-goals)
 
@@ -73,14 +73,14 @@ These limits follow rows 5 and 6 of the [AI Boundary Matrix](../requirements/ai-
 
 The workflow does not start until every **required** input passes deterministic validation. Validation failures do not call the model. The agent returns a fixed clarification message, or escalates according to Section 7.
 
-| Input | Required | Source | Validation rule (deterministic) | On failure |
-|---|---|---|---|---|
-| `session_id` | Yes | Session manager (`src/agent/memory.py`) | Must exist or be created by `SessionMemoryManager.initialize_session` | Reject the run |
-| `student_id` | Yes | The session's bound `student_ref` (set and checked by `open_session` in `src/app.py`, which rejects a session that belongs to another student). Never taken from free text in the message | `^[A-Za-z0-9][A-Za-z0-9/_-]{2,29}$` (same pattern as `tool_definitions.json`) | Reject the run. No tool is called |
-| `user_query` | Yes | Student message | 1–2000 characters after trimming (same limit as `original_message` in `tool_definitions.json`; **to be added**, as no length check exists in `orchestrator.py` yet). Prohibited-intent screen runs **before** iteration 1 | Prohibited intent → `escalated` at iteration 0 |
-| `retake_course_code` | Yes | Extracted from `user_query`, or from recent session history if missing | `\b[A-Za-z]{3}\d{4}\b`, stored in upper case | Ask the student **once**. If still missing → escalate (S6) |
-| `target_semester` | No | Student message, otherwise the current semester from the Academic Calendar | One of `"I"`, `"II"`, `"recess"` | Default to the current semester and state this assumption in the response |
-| `student_confirmed` | Only for a ticket | Explicit "yes" from the student after seeing the draft ticket | Must be literally `true` (schema `enum: [true]`) | Ticket is **not** created; the run ends `escalated` with "awaiting confirmation" |
+| Input                | Required          | Source                                                                                                                                                                                    | Validation rule (deterministic)                                                                                                                                                                                           | On failure                                                                       |
+| -------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `session_id`         | Yes               | Session manager (`src/agent/memory.py`)                                                                                                                                                   | Must exist or be created by `SessionMemoryManager.initialize_session`                                                                                                                                                     | Reject the run                                                                   |
+| `student_id`         | Yes               | The session's bound `student_ref` (set and checked by `open_session` in `src/app.py`, which rejects a session that belongs to another student). Never taken from free text in the message | `^[A-Za-z0-9][A-Za-z0-9/_-]{2,29}$` (same pattern as `tool_definitions.json`)                                                                                                                                             | Reject the run. No tool is called                                                |
+| `user_query`         | Yes               | Student message                                                                                                                                                                           | 1–2000 characters after trimming (same limit as `original_message` in `tool_definitions.json`; **to be added**, as no length check exists in `orchestrator.py` yet). Prohibited-intent screen runs **before** iteration 1 | Prohibited intent → `escalated` at iteration 0                                   |
+| `retake_course_code` | Yes               | Extracted from `user_query`, or from recent session history if missing                                                                                                                    | `\b[A-Za-z]{3}\d{4}\b`, stored in upper case                                                                                                                                                                              | Ask the student **once**. If still missing → escalate (S6)                       |
+| `target_semester`    | No                | Student message, otherwise the current semester from the Academic Calendar                                                                                                                | One of `"I"`, `"II"`, `"recess"`                                                                                                                                                                                          | Default to the current semester and state this assumption in the response        |
+| `student_confirmed`  | Only for a ticket | Explicit "yes" from the student after seeing the draft ticket                                                                                                                             | Must be literally `true` (schema `enum: [true]`)                                                                                                                                                                          | Ticket is **not** created; the run ends `escalated` with "awaiting confirmation" |
 
 **Rule I-1:** The `student_id` used in every tool call must equal the authenticated `student_id` of the session. A student can never look up another student's timetable, even if they type another ID.
 
@@ -92,14 +92,14 @@ The workflow does not start until every **required** input passes deterministic 
 
 The agent may only call tools listed in this table. The orchestrator's `_dispatch_tool` method is the allow-list. Any other tool name returns `{"error": "Tool '<name>' not recognized."}` and counts as a failed step.
 
-| # | Tool / action | Planner action | Side effects | Permission | Implementation status |
-|---|---|---|---|---|---|
-| T1 | `retriever.retrieve(query, top_k=2)` (policy search over the approved corpus) | `RETRIEVE_KNOWLEDGE` | None (read-only) | Autonomous | Implemented: `src/rag/retriever.py` |
-| T2 | `get_course_schedule(student_id, course_code?, day?)` | `EXECUTE_TOOL` | None (read-only) | Autonomous, own `student_id` only | Implemented: `src/tools/timetable_tool.py` |
-| T3 | `get_course_offering(course_code, semester)` (scheduled sessions for the retake course) | `EXECUTE_TOOL` | None (read-only) | Autonomous | **Planned for Week 5.** Must follow the same schema-validation style as T2 |
-| T4 | `detect_schedule_conflicts(current, retake)` (pure overlap calculation) | Runs inside **Observe**. It is not chosen by the planner | None (pure function) | Deterministic, always runs after T2 and T3 succeed | **Planned for Week 5** |
-| T5 | `create_support_ticket(student_id, summary, original_message, category, priority, student_confirmed)` | `EXECUTE_TOOL` | **Writes a ticket record** | **Only with `student_confirmed == true`** | Implemented: `src/tools/ticket_tool.py` |
-| T6 | Final response generation (Gemini or the deterministic formatter) | `FINAL_SYNTHESIS` | None | Autonomous, grounded only in observations | Implemented: `_synthesize_response` |
+| #   | Tool / action                                                                                         | Planner action                                           | Side effects               | Permission                                         | Implementation status                                                      |
+| --- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | -------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------- |
+| T1  | `retriever.retrieve(query, top_k=2)` (policy search over the approved corpus)                         | `RETRIEVE_KNOWLEDGE`                                     | None (read-only)           | Autonomous                                         | Implemented: `src/rag/retriever.py`                                        |
+| T2  | `get_course_schedule(student_id, course_code?, day?)`                                                 | `EXECUTE_TOOL`                                           | None (read-only)           | Autonomous, own `student_id` only                  | Implemented: `src/tools/timetable_tool.py`                                 |
+| T3  | `get_course_offering(course_code, semester)` (scheduled sessions for the retake course)               | `EXECUTE_TOOL`                                           | None (read-only)           | Autonomous                                         | **Planned for Week 5.** Must follow the same schema-validation style as T2 |
+| T4  | `detect_schedule_conflicts(current, retake)` (pure overlap calculation)                               | Runs inside **Observe**. It is not chosen by the planner | None (pure function)       | Deterministic, always runs after T2 and T3 succeed | **Planned for Week 5**                                                     |
+| T5  | `create_support_ticket(student_id, summary, original_message, category, priority, student_confirmed)` | `EXECUTE_TOOL`                                           | **Writes a ticket record** | **Only with `student_confirmed == true`**          | Implemented: `src/tools/ticket_tool.py`                                    |
+| T6  | Final response generation (Gemini or the deterministic formatter)                                     | `FINAL_SYNTHESIS`                                        | None                       | Autonomous, grounded only in observations          | Implemented: `_synthesize_response`                                        |
 
 ### 4.1 Tool rules
 
@@ -113,7 +113,7 @@ The agent may only call tools listed in this table. The orchestrator's `_dispatc
 
 Two sessions `a` and `b` clash when:
 
-```
+```json
 a.day == b.day  AND  a.start_time < b.end_time  AND  b.start_time < a.end_time
 ```
 
@@ -127,38 +127,38 @@ The run state is held in one strongly typed `AgentState` object (`src/agent/stat
 
 ### 5.1 State fields
 
-| Field | Type | Meaning |
-|---|---|---|
-| `goal` | `str` | The goal from Section 2, filled in with the course code |
-| `current_step` | `AgentStep` enum | Current phase of the loop (Section 5.2) |
-| `plan_history` | `list[PlanRecord]` | Every plan the planner produced, in order, including re-plans |
-| `tool_observations` | `list[ToolObservation]` | Every tool call: tool, params, `ok`/`error`, result, latency |
-| `status` | `AgentStatus` enum | `running`, `success`, `recovered` or `escalated` |
-| `iteration_count` | `int` | Number of completed Plan → Act → Observe cycles, including re-plans |
+| Field               | Type                    | Meaning                                                             |
+| ------------------- | ----------------------- | ------------------------------------------------------------------- |
+| `goal`              | `str`                   | The goal from Section 2, filled in with the course code             |
+| `current_step`      | `AgentStep` enum        | Current phase of the loop (Section 5.2)                             |
+| `plan_history`      | `list[PlanRecord]`      | Every plan the planner produced, in order, including re-plans       |
+| `tool_observations` | `list[ToolObservation]` | Every tool call: tool, params, `ok`/`error`, result, latency        |
+| `status`            | `AgentStatus` enum      | `running`, `success`, `recovered` or `escalated`                    |
+| `iteration_count`   | `int`                   | Number of completed Plan → Act → Observe cycles, including re-plans |
 
 ### 5.2 Loop steps (`current_step`)
 
-| Step | What happens | Who decides |
-|---|---|---|
-| `SENSE` | Load session context, validate inputs, run the prohibited-intent screen | Deterministic code |
-| `PLAN` | Choose the next allowed action from Section 4 | Rule-based planner (`_plan_next_step`) |
-| `ACT` | Execute exactly one approved tool | Deterministic dispatcher |
-| `OBSERVE` | Record the result, run T4 when both schedules are present, check stop conditions | Deterministic code |
-| `REPLAN` | After a failed step, choose a recovery action (retry once, or escalate) | Rule-based planner |
-| `STOP` | Produce the final response and seal the state | Deterministic code + T6 |
+| Step      | What happens                                                                     | Who decides                            |
+| --------- | -------------------------------------------------------------------------------- | -------------------------------------- |
+| `SENSE`   | Load session context, validate inputs, run the prohibited-intent screen          | Deterministic code                     |
+| `PLAN`    | Choose the next allowed action from Section 4                                    | Rule-based planner (`_plan_next_step`) |
+| `ACT`     | Execute exactly one approved tool                                                | Deterministic dispatcher               |
+| `OBSERVE` | Record the result, run T4 when both schedules are present, check stop conditions | Deterministic code                     |
+| `REPLAN`  | After a failed step, choose a recovery action (retry once, or escalate)          | Rule-based planner                     |
+| `STOP`    | Produce the final response and seal the state                                    | Deterministic code + T6                |
 
 ### 5.3 Run status (`status`) and allowed transitions
 
 Only these four values are allowed, which matches the [Terminal Status Contract](../eval/failure_modes_and_eval.md#3-terminal-status-contract).
 
-| Status | Terminal? | Meaning |
-|---|---|---|
-| `running` | No | The loop is in progress. This is the only starting status |
-| `success` | Yes | All of G1–G6 are met with no tool failures |
-| `recovered` | Yes | At least one step failed, a single retry or safe fallback worked, and the student got a correct, grounded answer |
-| `escalated` | Yes | A stop condition from Section 7 fired. A human must act |
+| Status      | Terminal? | Meaning                                                                                                          |
+| ----------- | --------- | ---------------------------------------------------------------------------------------------------------------- |
+| `running`   | No        | The loop is in progress. This is the only starting status                                                        |
+| `success`   | Yes       | All of G1–G6 are met with no tool failures                                                                       |
+| `recovered` | Yes       | At least one step failed, a single retry or safe fallback worked, and the student got a correct, grounded answer |
+| `escalated` | Yes       | A stop condition from Section 7 fired. A human must act                                                          |
 
-```
+```json
             ┌──► success     (terminal)
  running ───┼──► recovered   (terminal)
             └──► escalated   (terminal)
@@ -171,14 +171,14 @@ Allowed transitions: `running → success`, `running → recovered`, `running �
 
 ## 6. Maximum Iteration Limits
 
-| Limit | Value | Enforced by |
-|---|---|---|
-| `RETAKE_WORKFLOW_MAX_ITERATIONS` | **5** Plan → Act → Observe cycles | `AgentState.iteration_count` checked before each `PLAN` |
-| Retries per tool after a failure | **1** | Re-plan rule R-6 |
-| Total re-plans per run | **2** | `plan_history` entries with `is_replan == True` |
-| Clarification questions to the student | **1** (missing course code) | Input rule in Section 3 |
-| Support tickets created per run | **1** | T5 is final-only (R-T1) |
-| Policy passages per retrieval | `top_k = 2` | Retriever call |
+| Limit                                  | Value                             | Enforced by                                             |
+| -------------------------------------- | --------------------------------- | ------------------------------------------------------- |
+| `RETAKE_WORKFLOW_MAX_ITERATIONS`       | **5** Plan → Act → Observe cycles | `AgentState.iteration_count` checked before each `PLAN` |
+| Retries per tool after a failure       | **1**                             | Re-plan rule R-6                                        |
+| Total re-plans per run                 | **2**                             | `plan_history` entries with `is_replan == True`         |
+| Clarification questions to the student | **1** (missing course code)       | Input rule in Section 3                                 |
+| Support tickets created per run        | **1**                             | T5 is final-only (R-T1)                                 |
+| Policy passages per retrieval          | `top_k = 2`                       | Retriever call                                          |
 
 **Why 5?** The minimum successful path needs 4 cycles: (1) retrieve policy, (2) read current timetable, (3) read retake offering, (4) final synthesis. T4 runs inside Observe and does not use a cycle. One extra cycle allows a single retry after a recoverable failure. More than that adds cost and latency without making the answer better.
 
@@ -200,31 +200,31 @@ These checks are deterministic and run in **SENSE** (before any tool call) and i
 
 ### 7.1 Normal stop conditions
 
-| ID | Condition | Final status | What the student is told |
-|---|---|---|---|
-| N1 | G1–G6 met and no clash found | `success` | Retake rules with citations, plus confirmation that the retake slot does not clash |
-| N2 | G1–G6 met and clash(es) found, and the student asked for information only | `success` | Retake rules, a list of each clash, and the office to contact. The agent does not choose a course to drop |
-| N3 | A step failed, the single retry succeeded, and the full report was produced | `recovered` | Same as N1 or N2 |
+| ID  | Condition                                                                   | Final status | What the student is told                                                                                  |
+| --- | --------------------------------------------------------------------------- | ------------ | --------------------------------------------------------------------------------------------------------- |
+| N1  | G1–G6 met and no clash found                                                | `success`    | Retake rules with citations, plus confirmation that the retake slot does not clash                        |
+| N2  | G1–G6 met and clash(es) found, and the student asked for information only   | `success`    | Retake rules, a list of each clash, and the office to contact. The agent does not choose a course to drop |
+| N3  | A step failed, the single retry succeeded, and the full report was produced | `recovered`  | Same as N1 or N2                                                                                          |
 
 ### 7.2 Escalation conditions (human hand-off required)
 
-| ID | Trigger (deterministic) | Final status | Hand-off target | Ticket |
-|---|---|---|---|---|
-| S1 | **Prohibited intent** in the query, matched against `SupportAgentOrchestrator.PROHIBITED_INTENTS` (e.g. "change my grade", "fee waiver", "tuition refund", "modify academic records", "disciplinary appeal"). The current list does not catch retake-specific wording such as "waive my retake fee" or "reset my retake attempts"; these phrases **must be added** when the workflow is implemented | `escalated` at **iteration 0**, no tool calls | Department administrator (`HARD_REFUSAL_MESSAGE`) → General Administration Queue | Offered, `category="administrative"` |
-| S2 | **Clash with no clash-free option** and the student asks what to do | `escalated` | Timetable & Registration Queue, for the Faculty Registrar / Head of Department to decide | Drafted with `category="timetable"`, needs confirmation |
-| S3 | **Discontinuation risk:** the student says this would be their 4th attempt at the course (policy limits retakes to 3, [Nakawa University Academic Handbook 2025/2026, s. 7 (Retakes and Progression), p. 4]) | `escalated` | Academic Policy Queue | Drafted with `category="policy"`, `priority="high"` |
-| S4 | **Iteration limit reached** (`iteration_count == 5`) without a terminal status | `escalated` | General Administration Queue | Offered, `category="administrative"` |
-| S5 | **Same tool failed twice** (after the one allowed retry), or `StudentNotFoundError` | `escalated` | Timetable & Registration Queue | Offered, `category="timetable"` |
-| S6 | **Missing or invalid course code** after one clarification question | `escalated` | Timetable & Registration Queue | Offered, `category="timetable"` |
-| S7 | **No policy evidence found** for the retake question (empty retrieval twice) | `escalated` | Academic Policy Queue | Offered, `category="policy"`. The agent states it "cannot confirm this from official records" |
-| S8 | **Withdrawal or administrative-error clash claim**, e.g. "the University put two of my courses at the same time". This needs Form AR/7 and a Faculty Board decision | `escalated` | Timetable & Registration Queue, for a Faculty Board decision on Form AR/7 | Drafted with `category="timetable"` |
-| S9 | **Outside the retake registration window** published in the Academic Calendar | `escalated` | Timetable & Registration Queue | Offered, `category="timetable"` |
-| S10 | **Distress or urgency cues** (e.g. "I will be discontinued", "I am desperate") matched against a fixed keyword list, as required by Boundary Matrix row 6. **This list does not exist in the code yet and must be added** | `escalated` | General Support Queue, flagged for Student Support Services | Offered, `category="other"`, `priority="high"` |
-| S11 | **Unknown planner action** or an unregistered tool requested twice | `escalated` | General Administration Queue | Offered, `category="administrative"` |
+| ID  | Trigger (deterministic)                                                                                                                                                                                                                                                                                                                                                                             | Final status                                  | Hand-off target                                                                          | Ticket                                                                                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| S1  | **Prohibited intent** in the query, matched against `SupportAgentOrchestrator.PROHIBITED_INTENTS` (e.g. "change my grade", "fee waiver", "tuition refund", "modify academic records", "disciplinary appeal"). The current list does not catch retake-specific wording such as "waive my retake fee" or "reset my retake attempts"; these phrases **must be added** when the workflow is implemented | `escalated` at **iteration 0**, no tool calls | Department administrator (`HARD_REFUSAL_MESSAGE`) → General Administration Queue         | Offered, `category="administrative"`                                                          |
+| S2  | **Clash with no clash-free option** and the student asks what to do                                                                                                                                                                                                                                                                                                                                 | `escalated`                                   | Timetable & Registration Queue, for the Faculty Registrar / Head of Department to decide | Drafted with `category="timetable"`, needs confirmation                                       |
+| S3  | **Discontinuation risk:** the student says this would be their 4th attempt at the course (policy limits retakes to 3, [Nakawa University Academic Handbook 2025/2026, s. 7 (Retakes and Progression), p. 4])                                                                                                                                                                                        | `escalated`                                   | Academic Policy Queue                                                                    | Drafted with `category="policy"`, `priority="high"`                                           |
+| S4  | **Iteration limit reached** (`iteration_count == 5`) without a terminal status                                                                                                                                                                                                                                                                                                                      | `escalated`                                   | General Administration Queue                                                             | Offered, `category="administrative"`                                                          |
+| S5  | **Same tool failed twice** (after the one allowed retry), or `StudentNotFoundError`                                                                                                                                                                                                                                                                                                                 | `escalated`                                   | Timetable & Registration Queue                                                           | Offered, `category="timetable"`                                                               |
+| S6  | **Missing or invalid course code** after one clarification question                                                                                                                                                                                                                                                                                                                                 | `escalated`                                   | Timetable & Registration Queue                                                           | Offered, `category="timetable"`                                                               |
+| S7  | **No policy evidence found** for the retake question (empty retrieval twice)                                                                                                                                                                                                                                                                                                                        | `escalated`                                   | Academic Policy Queue                                                                    | Offered, `category="policy"`. The agent states it "cannot confirm this from official records" |
+| S8  | **Withdrawal or administrative-error clash claim**, e.g. "the University put two of my courses at the same time". This needs Form AR/7 and a Faculty Board decision                                                                                                                                                                                                                                 | `escalated`                                   | Timetable & Registration Queue, for a Faculty Board decision on Form AR/7                | Drafted with `category="timetable"`                                                           |
+| S9  | **Outside the retake registration window** published in the Academic Calendar                                                                                                                                                                                                                                                                                                                       | `escalated`                                   | Timetable & Registration Queue                                                           | Offered, `category="timetable"`                                                               |
+| S10 | **Distress or urgency cues** (e.g. "I will be discontinued", "I am desperate") matched against a fixed keyword list, as required by Boundary Matrix row 6. **This list does not exist in the code yet and must be added**                                                                                                                                                                           | `escalated`                                   | General Support Queue, flagged for Student Support Services                              | Offered, `category="other"`, `priority="high"`                                                |
+| S11 | **Unknown planner action** or an unregistered tool requested twice                                                                                                                                                                                                                                                                                                                                  | `escalated`                                   | General Administration Queue                                                             | Offered, `category="administrative"`                                                          |
 
 ### 7.3 Hand-off rules
 
-- **H-1 Confirmation gate.** A ticket is only written when `student_confirmed == true`. Until then, the run ends with status `escalated` and a **drafted** ticket, plus the message "Reply *yes* to submit this ticket".
+- **H-1 Confirmation gate.** A ticket is only written when `student_confirmed == true`. Until then, the run ends with status `escalated` and a **drafted** ticket, plus the message "Reply _yes_ to submit this ticket".
 - **H-2 Complete hand-off package.** Every escalation records the following in `AgentState`, so staff do not need to ask the student again: the goal, `plan_history`, all `tool_observations`, any detected clashes, and the escalation ID (S1–S11).
 - **H-3 Honest status.** An escalated run never claims success. The response says plainly that a human must complete the task.
 - **H-4 No unilateral action.** Escalation means routing to a human queue. The agent does not contact staff, change records or promise an outcome.
@@ -243,13 +243,19 @@ Every run returns the existing orchestrator result shape, plus the workflow fiel
   "escalation_reason": "S2",
   "iterations": 4,
   "tool_calls": [
-    {"tool": "get_course_schedule", "params": {}, "status": "ok", "result": [], "latency_ms": 3.1}
+    {
+      "tool": "get_course_schedule",
+      "params": {},
+      "status": "ok",
+      "result": [],
+      "latency_ms": 3.1
+    }
   ],
   "conflicts": [
-    {"retake_session": {}, "current_session": {}, "overlap_minutes": 60}
+    { "retake_session": {}, "current_session": {}, "overlap_minutes": 60 }
   ],
   "plan_history": [
-    {"iteration": 1, "action": "RETRIEVE_KNOWLEDGE", "is_replan": false}
+    { "iteration": 1, "action": "RETRIEVE_KNOWLEDGE", "is_replan": false }
   ]
 }
 ```
@@ -260,12 +266,12 @@ Every run returns the existing orchestrator result shape, plus the workflow fiel
 
 ## 9. Reference Execution Paths
 
-| Trace | Path | Iterations | Final status |
-|---|---|---|---|
-| A: Happy path, no clash | SENSE → RETRIEVE (T1) → T2 → T3 → T4 in Observe → SYNTHESIS | 4 | `success` |
-| B: Recovery | SENSE → T1 → T2 **fails** → REPLAN (retry T2) → T2 ok → T3 → SYNTHESIS | 5 | `recovered` |
-| C: Clash needing an academic decision | SENSE → T1 → T2 → T3 → T4 finds a clash → student asks which to drop → S2 → draft ticket | 4 | `escalated` |
-| D: Prohibited request | SENSE: "I want a fee waiver for my retake" → S1 | 0 | `escalated` |
+| Trace                                 | Path                                                                                     | Iterations | Final status |
+| ------------------------------------- | ---------------------------------------------------------------------------------------- | ---------- | ------------ |
+| A: Happy path, no clash               | SENSE → RETRIEVE (T1) → T2 → T3 → T4 in Observe → SYNTHESIS                              | 4          | `success`    |
+| B: Recovery                           | SENSE → T1 → T2 **fails** → REPLAN (retry T2) → T2 ok → T3 → SYNTHESIS                   | 5          | `recovered`  |
+| C: Clash needing an academic decision | SENSE → T1 → T2 → T3 → T4 finds a clash → student asks which to drop → S2 → draft ticket | 4          | `escalated`  |
+| D: Prohibited request                 | SENSE: "I want a fee waiver for my retake" → S1                                          | 0          | `escalated`  |
 
 These traces are the acceptance tests for the Week 5 "three execution traces" deliverable. Trace B is the required failure-and-recovery case.
 
@@ -273,14 +279,14 @@ These traces are the acceptance tests for the Week 5 "three execution traces" de
 
 ## 10. Traceability
 
-| Contract clause | Implemented / verified in |
-|---|---|
-| Prohibited-intent screen (S1) | `SupportAgentOrchestrator.PROHIBITED_INTENTS`, `tests/agent/test_traces.py` |
-| Terminal statuses (Section 5.3) | `VALID_RUN_STATUSES` in `orchestrator.py`; `AgentStatus` in `src/agent/state.py` |
-| Tool allow-list (Section 4) | `_dispatch_tool` in `orchestrator.py`; `src/schemas/tool_definitions.json` |
-| Ticket confirmation gate (H-1) | `create_support_ticket(student_confirmed=...)` in `src/tools/ticket_tool.py` |
-| Iteration limits (Section 6) | `AgentState.iteration_count` (Week 5); `MAX_AGENT_ITERATIONS` for the general loop |
-| Failure-mode coverage | `docs/eval/failure_modes_and_eval.md` |
+| Contract clause                 | Implemented / verified in                                                          |
+| ------------------------------- | ---------------------------------------------------------------------------------- |
+| Prohibited-intent screen (S1)   | `SupportAgentOrchestrator.PROHIBITED_INTENTS`, `tests/agent/test_traces.py`        |
+| Terminal statuses (Section 5.3) | `VALID_RUN_STATUSES` in `orchestrator.py`; `AgentStatus` in `src/agent/state.py`   |
+| Tool allow-list (Section 4)     | `_dispatch_tool` in `orchestrator.py`; `src/schemas/tool_definitions.json`         |
+| Ticket confirmation gate (H-1)  | `create_support_ticket(student_confirmed=...)` in `src/tools/ticket_tool.py`       |
+| Iteration limits (Section 6)    | `AgentState.iteration_count` (Week 5); `MAX_AGENT_ITERATIONS` for the general loop |
+| Failure-mode coverage           | `docs/eval/failure_modes_and_eval.md`                                              |
 
 ---
 
@@ -292,7 +298,7 @@ This contract is versioned with the code. Any change to the goal, tool list, lim
 2. update or add a test that proves the new rule;
 3. be reviewed by at least one other team member before merging into `main`.
 
-| Version | Date | Change |
-|---|---|---|
-| 1.0 | 2026-10-01 | First contract for the Course Retake & Timetable Conflict Resolution workflow |
-| 1.1 | 2026-10-01 | Aligned with existing code: real citation format, ticket queues from `CATEGORY_QUEUES`, session-bound `student_id`, tool-module validators; marked missing pieces (retake prohibited phrases, distress keywords, input length check) as to be added |
+| Version | Date       | Change                                                                                                                                                                                                                                              |
+| ------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1.0     | 2026-10-01 | First contract for the Course Retake & Timetable Conflict Resolution workflow                                                                                                                                                                       |
+| 1.1     | 2026-10-01 | Aligned with existing code: real citation format, ticket queues from `CATEGORY_QUEUES`, session-bound `student_id`, tool-module validators; marked missing pieces (retake prohibited phrases, distress keywords, input length check) as to be added |
