@@ -5,13 +5,14 @@
 
 ## 1. Architectural Scope & Design Principles
 
-In compliance with explicit workflow state modeling principles, the Student Support Case Agent models execution state as a deterministic Finite State Machine (FSM).
+In accordance with explicit workflow state modeling principles, the Student Support Case Agent models execution state as a deterministic Finite State Machine (FSM) implemented in `src/agent/state.py`.
 
-State is decoupled from runtime loop variables and modeled as an immutable, serializable snapshot (`AgentWorkflowState`). This guarantees:
+Runtime state is encapsulated in `AgentState`, which serves as the single source of truth for the entire Sense -> Plan -> Act -> Observe -> Re-plan / Stop cycle. Key architectural invariants:
 
-1. **Full Observability & Auditability:** Every state transition emits a typed telemetry event with complete context.
-2. **Deterministic Fast-Fail & Boundary Enforcement:** Critical transitions (such as tool dispatch or administrative actions) require validated preconditions; invalid transitions raise explicit runtime errors.
-3. **Recovery & Bounded Iteration:** Multi-step replanning is explicitly bounded by $N \le 3$ iterations before forcing an escalation or final synthesis state.
+1. **Deterministic Transition Enforcement:** Only transitions defined in `ALLOWED_STEP_TRANSITIONS` are permitted; illegal steps raise `InvalidTransitionError`.
+2. **Terminal State Sealing:** Once a run completes or escalates (`SUCCESS`, `RECOVERED`, or `ESCALATED`), the state is permanently sealed and rejects any further mutations (`StateSealedError`).
+3. **Hard Computational Ceilings:** Iteration bounds (`max_iterations = 5`) and recovery limits (`max_replans = 2`) prevent unbounded reasoning loops.
+4. **Point-in-Time Observability:** Generates immutable `StateSnapshot` instances for zero-side-effect auditing and telemetry sinks.
 
 ---
 
@@ -21,66 +22,85 @@ State is decoupled from runtime loop variables and modeled as an immutable, seri
 
 ---
 
-## 3. Workflow Phase Enums
+## 3. Workflow Phase Enums & Transitions (`AgentStep` / `WorkflowPhase`)
 
-The lifecycle of each turn progresses through discrete, typed phases:
+The lifecycle phases map directly to `AgentStep` in `src/agent/state.py`:
 
-| Phase            | Category         | Description                                                                      | Permitted Next Phases                    |
-| :--------------- | :--------------- | :------------------------------------------------------------------------------- | :--------------------------------------- |
-| `INITIALIZED`    | Setup            | Session instantiated, memory buffer loaded, and telemetry initialized.           | `SENSING`                                |
-| `SENSING`        | Intake & Safety  | Evaluates user input against Iteration-0 deterministic safety guardrails.        | `PLANNING`, `ESCALATED`                  |
-| `PLANNING`       | Strategy         | Selects deterministic tool actions, policy retrievals, or terminal synthesis.    | `EXECUTING_TOOL`, `SYNTHESIZING`         |
-| `EXECUTING_TOOL` | Action           | Dispatches tools (`get_course_schedule`, `retriever`, `create_support_ticket`).  | `OBSERVING`                              |
-| `OBSERVING`      | Assessment       | Assesses intermediate execution results, schemas, and error states.              | `PLANNING`, `REPLANNING`, `SYNTHESIZING` |
-| `REPLANNING`     | Recovery         | Formulates an alternative strategy when a tool returns an error or empty result. | `PLANNING`, `ESCALATED`                  |
-| `SYNTHESIZING`   | Output           | Compiles a grounded final response citing verified university sources.           | `TERMINATED`                             |
-| `ESCALATED`      | Terminal (Guard) | Emits an administrative refusal or support escalation ticket.                    | `TERMINATED`                             |
-| `TERMINATED`     | Final            | State committed to session memory; turn metrics recorded to telemetry.           | _None_                                   |
+| Phase (`AgentStep`) | Category        | Description                                                                          | Permitted Next Steps (`ALLOWED_STEP_TRANSITIONS`) |     |
+| :------------------ | :-------------- | :----------------------------------------------------------------------------------- | :------------------------------------------------ | --- |
+| `SENSE`             | Intake & Safety | Evaluates user input against safety guardrails and institutional boundaries.         | `PLAN`, `STOP`                                    |     |
+| `PLAN`              | Strategy        | Selects deterministic tool actions, policy retrievals, or final synthesis.           | `ACT`, `STOP`                                     |     |
+| `ACT`               | Action          | Dispatches deterministic institutional tools (`get_course_schedule`, `ticket_tool`). | `OBSERVE`                                         |     |
+| `OBSERVE`           | Assessment      | Evaluates tool execution status (`ok` vs. `error`) and records latency.              | `PLAN`, `REPLAN`, `STOP`                          |     |
+| `REPLAN`            | Recovery        | Reformulates strategy upon failure within bounded`max_replans`.                      | `ACT`, `STOP`                                     |     |
+| `STOP`              | Terminal        | Seals state with`SUCCESS`, `RECOVERED`, or `ESCALATED` status.                       | _None_ (Terminal Node)                            |     |
 
 ---
 
-## 4. State Snapshot Schema
+## 4. State Representation & Snapshot Schema
 
-At any point during execution, the agent's complete state is represented by the following typed schema:
+At any point during execution, the agent's complete state is represented and captured via the following typed schema[cite: 1]:
 
-| Field Name                  | Type                   | Constraints / Allowed Values                                         | Description                                                                  |
-| :-------------------------- | :--------------------- | :------------------------------------------------------------------- | :--------------------------------------------------------------------------- |
-| `session_id`                | `str`                  | Non-empty string                                                     | Unique session identifier mapping to the conversation container.             |
-| `student_id`                | `str`                  | Format: `^\d{10}$`                                                   | Verified institutional student identifier (e.g., `"2300712345"`).            |
-| `turn_index`                | `int`                  | $\ge 1$                                                              | Sequential counter tracking dialogue turns within the session.               |
-| `iteration_count`           | `int`                  | $0 \le i \le 3$                                                      | Current iteration within the bounded reasoning loop.                         |
-| `active_goal`               | `Optional[str]`        | Max 256 characters                                                   | The specific intent currently being resolved by the planner.                 |
-| `intermediate_observations` | `List[Dict[str, Any]]` | List of observation records                                          | Structured history of intermediate tool results and latencies for this turn. |
-| `context_snippets`          | `List[Dict[str, Any]]` | List of passage records                                              | Grounded knowledge passages retrieved from policy vector stores.             |
-| `status`                    | `str`                  | `"running"`, `"success"`, `"refused"`, `"tool_error"`, `"escalated"` | High-level status flag defining current execution condition.                 |
+| Field Name          | Type                   | Description                                                                                   |
+| :------------------ | :--------------------- | :-------------------------------------------------------------------------------------------- |
+| `goal`              | `str`                  | The high-level intent or user problem being resolved by the run[cite: 1].                     |
+| `current_step`      | `str`                  | Current active lifecycle step (`sense`, `plan`, `act`, `observe`, `replan`, `stop`)[cite: 1]. |
+| `status`            | `str`                  | Run status:`running`, `success`, `recovered`, or `escalated`.                                 |
+| `iteration_count`   | `int`                  | Number of completed planning/replanning cycles ($0 \le i \le \text{max\_iterations}$).        |
+| `max_iterations`    | `int`                  | Hard computational cap on planning cycles (default: 5).                                       |
+| `max_replans`       | `int`                  | Hard limit on recovery replanning cycles (default: 2).                                        |
+| `session_id`        | `Optional[str]`        | Unique session identifier mapping to the conversation container.                              |
+| `student_id`        | `Optional[str]`        | Verified student registration/identifier (e.g.,`"2300712345"`).                               |
+| `context_snippets`  | `List[Dict[str, Any]]` | Grounded policy passages retrieved from institutional knowledge stores.                       |
+| `plan_history`      | `List[Dict[str, Any]]` | Chronological list of serialized`PlanRecord` plans created during the run.                    |
+| `tool_observations` | `List[Dict[str, Any]]` | Chronological list of serialized`ToolObservation` records capturing tool returns.             |
+| `timestamp`         | `str`                  | ISO 8601 UTC timestamp of the snapshot capture.                                               |
 
-### JSON Schema Instance Example
+### Example Serialized JSON State Snapshot
 
 ```json
 {
+  "goal": "Retrieve timetable for BSE4104",
+  "current_step": "observe",
+  "status": "running",
+  "iteration_count": 1,
+  "max_iterations": 5,
+  "max_replans": 2,
   "session_id": "session-live-01",
   "student_id": "2300712345",
-  "turn_index": 1,
-  "iteration_count": 1,
-  "active_goal": "Resolve course timetable for BSE4104",
-  "intermediate_observations": [
+  "context_snippets": [],
+  "plan_history": [
     {
-      "step": 1,
-      "action": "get_course_schedule",
-      "status": "ok",
-      "latency_ms": 38.5
+      "iteration": 1,
+      "action": "EXECUTE_TOOL",
+      "tool_name": "get_course_schedule",
+      "tool_params": { "course_code": "BSE4104" },
+      "rationale": "Fetch lecture schedule",
+      "is_replan": false,
+      "timestamp": "2026-10-09T07:15:00.000Z"
     }
   ],
-  "context_snippets": [],
-  "status": "running"
+  "tool_observations": [
+    {
+      "iteration": 1,
+      "tool": "get_course_schedule",
+      "params": { "course_code": "BSE4104" },
+      "status": "ok",
+      "result": { "slots": ["Mon 09:00 - 11:00", "Wed 11:00 - 13:00"] },
+      "latency_ms": 32.5,
+      "timestamp": "2026-10-09T07:15:00.032Z"
+    }
+  ],
+  "timestamp": "2026-10-09T07:15:00.035Z"
 }
 ```
 
 ---
 
-## 5. Validation Invariants & Guardrail Rules
+## 5. Invariant Checks & Guardrail Rules
 
-1. **Iteration-0 Deterministic Safety Gate:** A transition from `SENSING` to `PLANNING` is strictly forbidden if prohibited intent keywords (grade, mark, fee, or disciplinary alterations) match. The state machine MUST transition directly to `ESCALATED` with zero token leakage.
-2. **Bounded Iteration Ceiling ($N \le 3$):** If `iteration_count >= 3` during `OBSERVING` or `REPLANNING`, further tool dispatch transitions (`EXECUTING_TOOL`) are prohibited. The orchestrator must transition directly to `ESCALATED` or `SYNTHESIZING`.
-3. **Explicit Precondition Enforcement:** Transitions into state-modifying actions (such as `create_support_ticket`) require `student_confirmed == true`. Missing parameters must yield structured errors caught during `OBSERVING`, triggering `REPLANNING`.
-4. **State Immutability & Auditability:** State snapshots are immutable historical records. All updates produce a newly incremented snapshot record for downstream telemetry inspection.
+1. **State Invariance:** Direct field mutations are rejected; transitions must occur through `advance_to()`, `record_plan()`, and `record_observation()`.
+2. **Terminal Inviolability:** Once `finish()`, `complete()`, or `escalate()` is invoked, the state transitions to `AgentStep.STOP` and raises `StateSealedError` on any subsequent modification attempt.
+3. **Recovery Semantics:** A run that experienced tool failures cannot complete with `AgentStatus.SUCCESS`; it must complete as `AgentStatus.RECOVERED` or `AgentStatus.ESCALATED`.
+4. **Bounded Iterations & Replans:** Entering `PLAN` or `REPLAN` increments `iteration_count`. If `iteration_count >= max_iterations`, execution raises `IterationLimitExceededError`. If `replan_count >= max_replans`, entering `REPLAN` raises `ReplanLimitExceededError`.
+5. **Human Escalation Safety:** An escalation handoff (`escalate()`) requires an explicit `escalation_reason` string and seals the run immediately from any open step.
