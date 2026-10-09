@@ -227,6 +227,9 @@ class AgentState:
     escalation_reason: str | None = None
     started_at: str = field(default_factory=_now_iso)
     finished_at: str | None = None
+    session_id: str | None = None
+    student_id: str | None = None
+    context_snippets: list[dict[str, Any]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not isinstance(self.goal, str) or not self.goal.strip():
@@ -434,8 +437,62 @@ class AgentState:
             "max_iterations": self.max_iterations,
             "max_replans": self.max_replans,
             "escalation_reason": self.escalation_reason,
+            "session_id": getattr(self, "session_id", None),
+            "student_id": getattr(self, "student_id", None),
+            "context_snippets": list(getattr(self, "context_snippets", [])),
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "plan_history": [plan.to_dict() for plan in self.plan_history],
             "tool_observations": [obs.to_dict() for obs in self.tool_observations],
+        }
+        
+    def snapshot(self) -> StateSnapshot:
+        """Produces an immutable point-in-time StateSnapshot."""
+        return StateSnapshot(
+            goal=self.goal,
+            current_step=self.current_step.value,
+            status=self.status.value,
+            iteration_count=self.iteration_count,
+            max_iterations=self.max_iterations,
+            session_id=self.session_id,
+            student_id=self.student_id,
+            context_snippets=list(self.context_snippets),
+            plan_history=[p.to_dict() for p in self.plan_history],
+            tool_observations=[o.to_dict() for o in self.tool_observations],
+        )
+
+# ==========================================================================
+# 6. Snapshots & Aliases (Week 6 State Architecture Alignment)
+# ==========================================================================
+
+WorkflowPhase = AgentStep  # Compatibility alias
+
+@dataclass(frozen=True)
+class StateSnapshot:
+    """Immutable point-in-time snapshot of the agent workflow state."""
+    goal: str
+    current_step: str
+    status: str
+    iteration_count: int
+    max_iterations: int
+    session_id: str | None
+    student_id: str | None
+    context_snippets: list[dict[str, Any]]
+    plan_history: list[dict[str, Any]]
+    tool_observations: list[dict[str, Any]]
+    timestamp: str = field(default_factory=_now_iso)
+
+    def to_dict(self) -> dict:
+        return {
+            "goal": self.goal,
+            "current_step": self.current_step,
+            "status": self.status,
+            "iteration_count": self.iteration_count,
+            "max_iterations": self.max_iterations,
+            "session_id": self.session_id,
+            "student_id": self.student_id,
+            "context_snippets": self.context_snippets,
+            "plan_history": self.plan_history,
+            "tool_observations": self.tool_observations,
+            "timestamp": self.timestamp,
         }
