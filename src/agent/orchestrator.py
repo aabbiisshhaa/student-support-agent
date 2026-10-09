@@ -13,6 +13,18 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 
 from src.agent.memory import ConversationMemory
+from src.agent.state import (
+    AgentState,
+    AgentStatus,
+    AgentStep,
+    PlanAction,
+    PlanRecord,
+    ToolObservation,
+    StateSnapshot,
+    AgentStateError,
+    InvalidTransitionError,
+    StateSealedError,
+)
 from src.baseline_model import GeminiModel
 from src.rag.retriever import EmbedderInfo, Retriever
 from src.telemetry.tracker import TelemetryTracker, TurnTelemetry
@@ -138,6 +150,26 @@ CRITICAL RULES:
         if on_event is not None:
             on_event(event)
 
+    def _emit_state_transition(
+        self,
+        trace_cb: EventCallback,
+        session_id: str,
+        from_step: str,
+        to_step: str,
+        snapshot: StateSnapshot,
+    ) -> None:
+        """Emits a formal telemetry state transition event."""
+        self._emit(
+            trace_cb,
+            {
+                "event": "state_transition",
+                "session_id": session_id,
+                "from_step": from_step,
+                "to_step": to_step,
+                "snapshot": snapshot.to_dict(),
+            },
+        )
+
     def _finish_tool_call(
         self,
         on_event: Optional[EventCallback],
@@ -206,13 +238,24 @@ CRITICAL RULES:
         tool_calls: List[Dict[str, Any]] = []
         replan_count = 0
         trace_events: List[Dict[str, Any]] = []
+        snapshots: List[Dict[str, Any]] = []
 
         def trace_callback(event: Dict[str, Any]) -> None:
             trace_events.append(event)
             if on_event is not None and event.get("event") in {"tool_start", "tool_end"}:
                 on_event(event)
-    
-        # --- SENSE PHASE ---   
+        
+        # -------------------------------------------------------------    
+        # STATE MACHINE INITIALIZATION: PHASE = SENSE   
+        # -------------------------------------------------------------
+        state = AgentState(
+            goal=user_query,
+            max_iterations=self.max_iterations,
+            session_id=session_id,
+            student_id=student_id,
+        )
+        snapshots.append(state.snapshot().to_dict())
+                         
         logger.info(f"[{session_id}] SENSE: Ingesting query and session state...")
         self.memory.initialize_session(session_id, student_id)
 
@@ -235,6 +278,13 @@ CRITICAL RULES:
         
         if is_grade_tampering or any(intent in query_lower for intent in self.PROHIBITED_INTENTS):
             logger.warning(f"[{session_id}] SAFETY REFUSAL: Prohibited intent detected at Iteration 0.")
+            
+            # Deterministic State Transition: SENSE -> STOP (escalate)
+            prev_step = state.current_step.value
+            state.escalate("OUT_OF_SCOPE_ADMINISTRATIVE_ACTION")
+            self._emit_state_transition(trace_callback, session_id, prev_step, state.current_step.value, state.snapshot())
+            snapshots.append(state.snapshot().to_dict())
+            
             self.memory.add_turn(session_id, "user", user_query)
             self.memory.add_turn(session_id, "assistant", self.HARD_REFUSAL_MESSAGE)
             escalation = self._escalation_payload(
@@ -259,6 +309,7 @@ CRITICAL RULES:
                     "tool_calls": tool_calls,
                     "final_response": self.HARD_REFUSAL_MESSAGE,
                     "escalation": escalation,
+                    "snapshots": snapshots,
                 },
             )
 
@@ -270,6 +321,7 @@ CRITICAL RULES:
                 "replan_count": 0,
                 "tool_calls": tool_calls,
                 "escalation": escalation,
+                "snapshots": snapshots,
             }
 
         self.memory.add_turn(
@@ -284,10 +336,30 @@ CRITICAL RULES:
         iteration = 0
         observation = ""
         context_snippets: List[Dict[str, Any]] = []
+        
+        # -------------------------------------------------------------
+        # BOUNDED STATE MACHINE EXECUTION LOOP: PHASE = REPLAN
+        # -------------------------------------------------------------
+        while state.remaining_iterations > 0 and not state.is_terminal:
+            # Advance to PLAN (increments iteration_count deterministically)
+            prev_step = state.current_step.value
+            
+            # Entering the iteration:
+            # If coming from OBSERVE, this iteration is a REPLAN.
+            # If starting fresh from SENSE, this iteration is a PLAN.
+            if state.current_step == AgentStep.OBSERVE:
+                state.advance_to(AgentStep.REPLAN)
+            else:
+                state.advance_to(AgentStep.PLAN)
 
-        # --- MULTI-STEP RE-PLANNING EXECUTION LOOP ---        
-        while iteration < self.max_iterations:
-            iteration += 1
+            self._emit_state_transition(
+                trace_callback,
+                session_id,
+                prev_step,
+                state.current_step.value,
+                state.snapshot(),
+            )
+            iteration = state.iteration_count
             self._emit(
                 trace_callback,
                 {
@@ -296,16 +368,56 @@ CRITICAL RULES:
                     "max_iterations": self.max_iterations,
                 },
             )
+            
+            # PLAN: Select action
+            plan_data = self._plan_next_step(
+                user_query,
+                session_history,
+                observation,
+                student_id,
+                iteration,
+                session_id,
+            )
+            raw_action = plan_data.get("action", "")
+            
+            # If action is an unrecognized / non-terminating action, let the loop continue
+            # without synthesizing so it hits the iteration boundary.
+            
+            # Gracefully handle known and unknown actions
+            if raw_action not in {"FINAL_SYNTHESIS", "RETRIEVE_KNOWLEDGE", "EXECUTE_TOOL"}:
+                logger.warning(
+                    f"[{session_id}] Unrecognized action '{raw_action}'. Looping towards iteration bound."
+                )
+                # Advance PLAN -> ACT -> OBSERVE cycle so state remains contract-valid
+                prev_step = state.current_step.value
+                state.advance_to(AgentStep.ACT)
+                self._emit_state_transition(trace_callback, session_id, prev_step, state.current_step.value, state.snapshot())
 
-            # PLAN: Dynamically select action based on current state & intermediate observations
-            plan = self._plan_next_step(user_query, session_history, observation, student_id, iteration, session_id)
-            self._emit(
-                trace_callback,
-                {"event": "plan", "iteration": iteration, "plan": plan},
+                prev_step = state.current_step.value
+                state.advance_to(AgentStep.OBSERVE)
+                self._emit_state_transition(trace_callback, session_id, prev_step, state.current_step.value, state.snapshot())
+                continue
+
+            plan_action = PlanAction(raw_action)
+            tool_params_for_record = plan_data.get("tool_params") or (
+                {"query": plan_data["query"]} if "query" in plan_data else {}
+            )
+            state.record_plan(
+                action=plan_action,
+                tool_name=plan_data.get("tool_name"),
+                tool_params=tool_params_for_record,
+                rationale=f"Selected {plan_action.value} during iteration {iteration}",
             )
 
-            # STOP Condition: Final synthesis
-            if plan["action"] == "FINAL_SYNTHESIS":
+            self._emit(
+                trace_callback,
+                {"event": "plan", "iteration": iteration, "plan": plan_data},
+            )
+            
+            # ---------------------------------------------------------
+            # PLAN -> STOP: Final Synthesis
+            # ---------------------------------------------------------
+            if plan_action is PlanAction.FINAL_SYNTHESIS:
                 logger.info(f"[{session_id}] STOP/SYNTHESIZE: Formulating grounded final response...")
                 m_start = time.time()
                 final_answer = self._synthesize_response(
@@ -324,9 +436,19 @@ CRITICAL RULES:
                     call["tool"] == "create_support_ticket" and call["status"] == "ok"
                     for call in tool_calls
                 )
-                tool_failed = any(call["status"] == "error" for call in tool_calls)
+                
+                # Deterministically seal state: PLAN/REPLAN -> STOP
+                prev_step = state.current_step.value
+                if ticket_created:
+                    state.escalate("Support ticket escalated to administrative desk")
+                else:
+                    state.complete()
 
-                turn_metrics.status = "recovered" if tool_failed else "success"
+                self._emit_state_transition(trace_callback, session_id, prev_step, state.current_step.value, state.snapshot())
+                snapshots.append(state.snapshot().to_dict())
+
+                status_result = state.status.value
+                turn_metrics.status = status_result
                 turn_metrics.model_latency_ms = m_latency
                 turn_metrics.tool_latency_ms = tool_time_total * 1000
                 turn_metrics.total_turn_latency_ms = (time.time() - start_time) * 1000
@@ -341,36 +463,50 @@ CRITICAL RULES:
                         "session_id": session_id,
                         "user_query": user_query,
                         "events": trace_events,
-                        "status": "escalated" if ticket_created else ("recovered" if tool_failed else "success"),
-                        "escalation_required": ticket_created,
+                        "status": status_result,
+                        "escalation_required": (status_result == "escalated"),
                         "iterations": iteration,
                         "tool_calls": tool_calls,
                         "final_response": final_answer,
+                        "snapshots": snapshots,
                     },
                 )
 
                 return {
-                    "status": "escalated" if ticket_created else ("recovered" if tool_failed else "success"),
+                    "status": status_result,
                     "response": final_answer,
-                    "escalation_required": ticket_created,
+                    "escalation_required": (status_result == "escalated"),
                     "iterations": iteration,
                     "replan_count": replan_count,
                     "tool_calls": tool_calls,
-                }     
-                        
-            # ACT Phase 1: RAG Retrieval
-            if plan["action"] == "RETRIEVE_KNOWLEDGE":
-                logger.info(f"[{session_id}] ACT: Retrieving RAG knowledge chunks...")
-                self._emit(trace_callback, {"event": "tool_start", "tool": "retriever"})
+                    "state": state.to_dict(),
+                }
+
+            # ---------------------------------------------------------
+            # PLAN / REPLAN -> ACT: Tool Dispatch
+            # ---------------------------------------------------------
+            prev_step = state.current_step.value
+            state.advance_to(AgentStep.ACT)
+            self._emit_state_transition(trace_callback, session_id, prev_step, state.current_step.value, state.snapshot())
+
+            # Pre-tool State Snapshot persistence
+            pre_tool_snapshot = state.snapshot()
+            snapshots.append(pre_tool_snapshot.to_dict())
+            self._emit(
+                trace_callback,
+                {"event": "pre_tool_snapshot", "snapshot": pre_tool_snapshot.to_dict()},
+            )         
+            
+            # ACT Execution: Knowledge retrieval or deterministic tool
+            if plan_action is PlanAction.RETRIEVE_KNOWLEDGE:
+                tool_name = "retriever"
+                tool_params = {"query": plan_data["query"]}
+                self._emit(trace_callback, {"event": "tool_start", "tool": tool_name})
                 started_at = time.time()
                 retrieval_result: Any = []
 
                 try:
-                    rag_result = self._get_retriever().retrieve(
-                        plan["query"],
-                        top_k=2,
-                    )
-
+                    rag_result = self._get_retriever().retrieve(plan_data["query"], top_k=2)
                     if rag_result.passages:
                         context_snippets = [
                             {
@@ -380,117 +516,112 @@ CRITICAL RULES:
                             }
                             for passage in rag_result.passages
                         ]
-
+                        state.context_snippets = context_snippets
                         retrieval_result = context_snippets
-                        observation = (
-                            "Policy Evidence: "
-                            f"{json.dumps(context_snippets)}"
-                        )
+                        observation = f"Policy Evidence: {json.dumps(context_snippets)}"
                     else:
-                        observation = (
-                            "No relevant policy documents found "
-                            "in the university database."
-                        )
-
+                        observation = "No relevant policy documents found in the university database."
                 except Exception as error:
-                    logger.error(
-                        "Error during RAG retrieval: %s",
-                        error,
-                    )
-                    observation = (
-                        "Knowledge base lookup failed: "
-                        f"{error}"
-                    )
-                    retrieval_result = {
-                        "error": str(error),
-                    }
+                    logger.error("Error during RAG retrieval: %s", error)
+                    observation = f"Knowledge base lookup failed: {error}"
+                    retrieval_result = {"error": str(error)}
 
                 elapsed = time.time() - started_at
                 tool_time_total += elapsed
-                tools_used.append("retriever")
-                tool_calls.append(self._finish_tool_call(
+                tools_used.append(tool_name)
+                finished_call = self._finish_tool_call(
                     trace_callback,
-                    "retriever",
-                    {"query": plan["query"]},
+                    tool_name,
+                    tool_params,
                     retrieval_result,
                     elapsed,
-                ))
+                )
+                tool_calls.append(finished_call)
+
                 if isinstance(retrieval_result, dict) and "error" in retrieval_result:
                     self.memory.add_turn(
                         session_id,
                         "system",
                         f"system_error search_academic_policy: {json.dumps(retrieval_result)}",
                     )
-                logger.info(f"[{session_id}] OBSERVE: Policy chunks retrieved. Proceeding to next iteration...")
-                continue
-                
-            # ACT Phase 2: Deterministic Tools
-            elif plan["action"] == "EXECUTE_TOOL":
-                tool_name = plan["tool_name"]
-                tool_params = plan["tool_params"]
 
-                logger.info(
-                    "[%s] ACT: Executing tool '%s' with %s",
-                    session_id,
-                    tool_name,
-                    tool_params,
-                )
+            elif plan_action is PlanAction.EXECUTE_TOOL:
+                tool_name = plan_data["tool_name"]
+                tool_params = plan_data["tool_params"]
 
-                self._emit(
-                    trace_callback,
-                    {
-                        "event": "tool_start",
-                        "tool": tool_name,
-                    },
-                )
-
+                self._emit(trace_callback, {"event": "tool_start", "tool": tool_name})
                 started_at = time.time()
-
-                tool_result = self._dispatch_tool(
-                    tool_name,
-                    tool_params,
-                )
-
+                tool_result = self._dispatch_tool(tool_name, tool_params)
                 elapsed = time.time() - started_at
+
                 tool_time_total += elapsed
                 tools_used.append(tool_name)
-                tool_calls.append(
-                    self._finish_tool_call(
-                        trace_callback,
-                        tool_name,
-                        tool_params,
-                        tool_result,
-                        elapsed,
-                    )
+                finished_call = self._finish_tool_call(
+                    trace_callback,
+                    tool_name,
+                    tool_params,
+                    tool_result,
+                    elapsed,
                 )
+                tool_calls.append(finished_call)
 
-                # OBSERVE & RE-PLAN EVALUATION
                 observation = f"Tool Result: {json.dumps(tool_result)}"
                 if isinstance(tool_result, dict) and "error" in tool_result:
                     self.memory.add_turn(session_id, "system", observation)
-                logger.info(f"[{session_id}] OBSERVE: Evaluated observation from '{tool_name}'.")
+                
+            # ---------------------------------------------------------
+            # ACT -> OBSERVE: Record Observation
+            # ---------------------------------------------------------
+            prev_step = state.current_step.value
+            state.advance_to(AgentStep.OBSERVE)
+            self._emit_state_transition(trace_callback, session_id, prev_step, state.current_step.value, state.snapshot())
 
-                # Detect failed precondition or parameter absence to trigger re-planning
-                failed_precondition = (
-                    isinstance(tool_result, dict) and "error" in tool_result
-                ) or (isinstance(tool_result, list) and len(tool_result) == 0)
+            latest_call = tool_calls[-1]
+            state.record_observation(
+                tool=latest_call["tool"],
+                params=latest_call["params"],
+                status=latest_call["status"],
+                result=latest_call["result"],
+                latency_ms=latest_call["latency_ms"],
+            )
 
-                if failed_precondition and iteration < self.max_iterations:
-                    replan_count += 1
-                    logger.warning(
-                        f"[{session_id}] REPLAN: Precondition failed or result empty. Initiating re-plan step {replan_count}."
-                    )
-                continue
+            # Post-tool State Snapshot persistence
+            post_tool_snapshot = state.snapshot()
+            snapshots.append(post_tool_snapshot.to_dict())
+            self._emit(
+                trace_callback,
+                {"event": "post_tool_snapshot", "snapshot": post_tool_snapshot.to_dict()},
+            )
 
+            # Count replans if precondition failed
+            failed_precondition = (
+                isinstance(latest_call["result"], dict) and "error" in latest_call["result"]
+            ) or (isinstance(latest_call["result"], list) and len(latest_call["result"]) == 0)
+
+            if failed_precondition:
+                replan_count += 1
+                logger.warning(
+                    f"[{session_id}] REPLAN: Precondition failed or result empty. Re-plan count {replan_count}."
+                )
+            
+        # -------------------------------------------------------------
+        # FALLBACK / ESCALATION IF ITERATIONS EXHAUSTED
+        # -------------------------------------------------------------
         fallback = (
             "I was unable to resolve your inquiry within the allowed "
             "execution cycles. Escalating to staff."
         )
+        if not state.is_terminal:
+            prev_step = state.current_step.value
+            state.escalate("MAX_ITERATIONS_REACHED")
+            self._emit_state_transition(trace_callback, session_id, prev_step, state.current_step.value, state.snapshot())
+            snapshots.append(state.snapshot().to_dict())
+
         escalation = self._escalation_payload(
             session_id,
             student_id,
             "MAX_ITERATIONS_REACHED",
-            iteration,
+            state.iteration_count,
         )
         self.memory.add_turn(session_id, "assistant", fallback)
         turn_metrics.status = "escalated"
@@ -506,32 +637,30 @@ CRITICAL RULES:
                 "events": trace_events,
                 "status": "escalated",
                 "escalation_required": True,
-                "iterations": iteration,
+                "iterations": state.iteration_count,
                 "tool_calls": tool_calls,
                 "final_response": fallback,
                 "escalation": escalation,
+                "snapshots": snapshots,
             },
         )
         return {
             "status": "escalated",
             "response": fallback,
             "escalation_required": True,
-            "iterations": iteration,
+            "iterations": state.iteration_count,
             "replan_count": replan_count,
             "tool_calls": tool_calls,
             "escalation": escalation,
+            "state": state.to_dict(),
         }
-            
-
+         
     @staticmethod
     def _ticket_summary(query: str) -> str:
         """Create a bounded factual support-ticket summary."""
-
         text = " ".join(query.split())
-
         if len(text) < TICKET_SUMMARY_MIN_LENGTH:
             text = f"Student request: {text}"
-
         return text[:TICKET_SUMMARY_MAX_LENGTH]
 
     def _plan_next_step(
@@ -663,14 +792,11 @@ CRITICAL RULES:
                     "student_id": student_id,
                     "summary": self._ticket_summary(query),
                     "original_message": query,
-                    "category": (
-                        TicketCategory.ADMINISTRATIVE.value
-                    ),
+                    "category": TicketCategory.ADMINISTRATIVE.value,
                     "priority": TicketPriority.MEDIUM.value,
                     "student_confirmed": True,
                 },
             }
-            
             
         # INITIAL PLAN ROUTE 3: University Policy Inquiry
         if not observation:
@@ -686,9 +812,7 @@ CRITICAL RULES:
     def _lowercase_enum(value: Any) -> str:
         """Normalize an enum member or string to lowercase."""
 
-        return str(
-            getattr(value, "value", value)
-        ).strip().lower()
+        return str(getattr(value, "value", value)).strip().lower()
 
     @staticmethod
     def _build_tool_params(tool_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -724,35 +848,23 @@ CRITICAL RULES:
         params: Dict[str, Any],
     ) -> Any:
         """Execute only tools on the registry's execution whitelist."""
-
         try:
             tool_params = self._build_tool_params(tool_name, params)
             return tool_registry.execute(tool_name, tool_params)
 
         except tool_registry.UnknownToolError:
             return {
-                "error": f"Tool '{tool_name}' not recognized."
-            }
-
+                "error": f"Tool '{tool_name}' not recognized."}
         except Exception as error:
-            logger.error(
-                "Error executing tool %s: %s",
-                tool_name,
-                error,
-            )
-            return {
-                "error": str(error),
-            }
+            logger.error("Error executing tool %s: %s", tool_name, error)
+            return {"error": str(error)}
 
     @staticmethod
     def _format_citation(value: Any) -> str:
         """Ensure a citation has one pair of square brackets."""
-
         citation = str(value).strip()
-
         if citation.startswith("[") and citation.endswith("]"):
             return citation
-
         return f"[{citation}]"
 
     def _synthesize_response(
@@ -799,11 +911,7 @@ instructions.
                 )
 
         if "Tool Result" in observation:
-            raw_tool = observation.replace(
-                "Tool Result: ",
-                "",
-                1,
-            )
+            raw_tool = observation.replace("Tool Result: ", "", 1)
 
             try:
                 data = json.loads(raw_tool)
@@ -814,56 +922,33 @@ instructions.
                         for item in data
                     ]
 
-                    return (
-                        "Here is your verified lecture timetable:"
-                        "\n\n"
-                        + "\n".join(entries)
-                    )
+                    return "Here is your verified lecture timetable: \n\n" + "\n".join(entries)
 
                 if isinstance(data, list):
                     return (
-                        "I found no lectures matching your request "
-                        "in your timetable."
+                        "I found no lectures matching your request in your timetable."
                     )
 
-                if (
-                    isinstance(data, dict)
-                    and "error" in data
-                ):
+                if isinstance(data, dict) and "error" in data:
                     reason = str(data["error"]).rstrip(".")
-
                     return (
-                        "I could not complete that request: "
-                        f"{reason}. Would you like me to submit a "
-                        "support ticket so a staff member can "
-                        "follow up?"
+                        f"I could not complete that request: {reason}. " 
+                        "Would you like me to submit a support ticket so a staff member can follow up?"
                     )
 
-                if (
-                    isinstance(data, dict)
-                    and "ticket_id" in data
-                ):
+                if isinstance(data, dict) and "ticket_id" in data:
                     return (
-                        "Your support ticket "
-                        f"**{data['ticket_id']}** has been "
-                        "registered with priority "
-                        f"**{data.get('priority')}**. Our "
-                        "administrative desk will review it "
-                        "shortly."
+                        f"Your support ticket **{data['ticket_id']}** has been registered "
+                        f"with priority **{data.get('priority')}**. Our administrative desk will review it shortly."
                     )
 
             except (TypeError, ValueError, json.JSONDecodeError):
-                logger.warning(
-                    "Tool output could not be decoded as JSON."
-                )
+                logger.warning("Tool output could not be decoded as JSON.")
 
             return f"Tool Execution Result:\n{raw_tool}"
 
         if isinstance(context, dict) and "error" in context:
-            return (
-                "I could not complete that policy lookup: "
-                f"{context['error']}"
-            )
+            return f"I could not complete that policy lookup: {context['error']}"
 
         if context:
             first = context[0]
@@ -872,7 +957,6 @@ instructions.
             return f"{first.get('text')} {citation_str}"
 
         return (
-            "I cannot confirm this information from current "
-            "official records. Would you like me to submit an "
-            "escalation ticket to the relevant department?"
+            "I cannot confirm this information from current official records. " 
+            "Would you like me to submit an escalation ticket to the relevant department?"
         )
