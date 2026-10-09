@@ -39,22 +39,22 @@ The lifecycle phases map directly to `AgentStep` in `src/agent/state.py`:
 
 ## 4. State Representation & Snapshot Schema
 
-At any point during execution, the agent's complete state is represented and captured via the following typed schema[cite: 1]:
+At any point during execution, the agent's complete state is represented and captured via the following typed schema:
 
-| Field Name          | Type                   | Description                                                                                   |
-| :------------------ | :--------------------- | :-------------------------------------------------------------------------------------------- |
-| `goal`              | `str`                  | The high-level intent or user problem being resolved by the run[cite: 1].                     |
-| `current_step`      | `str`                  | Current active lifecycle step (`sense`, `plan`, `act`, `observe`, `replan`, `stop`)[cite: 1]. |
-| `status`            | `str`                  | Run status:`running`, `success`, `recovered`, or `escalated`.                                 |
-| `iteration_count`   | `int`                  | Number of completed planning/replanning cycles ($0 \le i \le \text{max\_iterations}$).        |
-| `max_iterations`    | `int`                  | Hard computational cap on planning cycles (default: 5).                                       |
-| `max_replans`       | `int`                  | Hard limit on recovery replanning cycles (default: 2).                                        |
-| `session_id`        | `Optional[str]`        | Unique session identifier mapping to the conversation container.                              |
-| `student_id`        | `Optional[str]`        | Verified student registration/identifier (e.g.,`"2300712345"`).                               |
-| `context_snippets`  | `List[Dict[str, Any]]` | Grounded policy passages retrieved from institutional knowledge stores.                       |
-| `plan_history`      | `List[Dict[str, Any]]` | Chronological list of serialized`PlanRecord` plans created during the run.                    |
-| `tool_observations` | `List[Dict[str, Any]]` | Chronological list of serialized`ToolObservation` records capturing tool returns.             |
-| `timestamp`         | `str`                  | ISO 8601 UTC timestamp of the snapshot capture.                                               |
+| Field Name          | Type                   | Description                                                                            |
+| :------------------ | :--------------------- | :------------------------------------------------------------------------------------- |
+| `goal`              | `str`                  | The high-level intent or user problem being resolved by the run.                       |
+| `current_step`      | `str`                  | Current active lifecycle step (`sense`, `plan`, `act`, `observe`, `replan`, `stop`).   |
+| `status`            | `str`                  | Run status:`running`, `success`, `recovered`, or `escalated`.                          |
+| `iteration_count`   | `int`                  | Number of completed planning/replanning cycles ($0 \le i \le \text{max\_iterations}$). |
+| `max_iterations`    | `int`                  | Hard computational cap on planning cycles (default: 5).                                |
+| `max_replans`       | `int`                  | Hard limit on recovery replanning cycles (default: 2).                                 |
+| `session_id`        | `Optional[str]`        | Unique session identifier mapping to the conversation container.                       |
+| `student_id`        | `Optional[str]`        | Verified student registration/identifier (e.g.,`"2300712345"`).                        |
+| `context_snippets`  | `List[Dict[str, Any]]` | Grounded policy passages retrieved from institutional knowledge stores.                |
+| `plan_history`      | `List[Dict[str, Any]]` | Chronological list of serialized`PlanRecord` plans created during the run.             |
+| `tool_observations` | `List[Dict[str, Any]]` | Chronological list of serialized`ToolObservation` records capturing tool returns.      |
+| `timestamp`         | `str`                  | ISO 8601 UTC timestamp of the snapshot capture.                                        |
 
 ### Example Serialized JSON State Snapshot
 
