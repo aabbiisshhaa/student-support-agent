@@ -302,6 +302,19 @@ CRITICAL RULES:
                 {
                     "session_id": session_id,
                     "user_query": user_query,
+                    "prompt_template": self.SYSTEM_PROMPT,
+                    "model_name": turn_metrics.model_name,
+                    "context_snippets": [],
+                    "token_usage": {
+                        "prompt": turn_metrics.prompt_tokens,
+                        "completion": turn_metrics.completion_tokens,
+                        "total": turn_metrics.total_tokens,
+                    },
+                    "latencies_ms": {
+                        "model": turn_metrics.model_latency_ms,
+                        "tools": turn_metrics.tool_latency_ms,
+                        "total": turn_metrics.total_turn_latency_ms,
+                    },
                     "events": trace_events,
                     "status": "escalated",
                     "escalation_required": True,
@@ -462,6 +475,19 @@ CRITICAL RULES:
                     {
                         "session_id": session_id,
                         "user_query": user_query,
+                        "prompt_template": self.SYSTEM_PROMPT,
+                        "model_name": turn_metrics.model_name,
+                        "context_snippets": context_snippets,
+                        "token_usage": {
+                            "prompt": turn_metrics.prompt_tokens,
+                            "completion": turn_metrics.completion_tokens,
+                            "total": turn_metrics.total_tokens,
+                        },
+                        "latencies_ms": {
+                            "model": turn_metrics.model_latency_ms,
+                            "tools": turn_metrics.tool_latency_ms,
+                            "total": turn_metrics.total_turn_latency_ms,
+                        },
                         "events": trace_events,
                         "status": status_result,
                         "escalation_required": (status_result == "escalated"),
@@ -634,6 +660,19 @@ CRITICAL RULES:
             {
                 "session_id": session_id,
                 "user_query": user_query,
+                "prompt_template": self.SYSTEM_PROMPT,
+                "model_name": turn_metrics.model_name,
+                "context_snippets": context_snippets,
+                "token_usage": {
+                    "prompt": turn_metrics.prompt_tokens,
+                    "completion": turn_metrics.completion_tokens,
+                    "total": turn_metrics.total_tokens,
+                },
+                "latencies_ms": {
+                    "model": turn_metrics.model_latency_ms,
+                    "tools": turn_metrics.tool_latency_ms,
+                    "total": turn_metrics.total_turn_latency_ms,
+                },
                 "events": trace_events,
                 "status": "escalated",
                 "escalation_required": True,
