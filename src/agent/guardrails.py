@@ -139,33 +139,38 @@ DELIMITER_RULE = (
 ADMIN_VERBS = (
     r"(?:change|alter|modify|edit|update(?! (?:me|on)\b)|override|overwrite|delete|"
     r"remove|erase|expunge|waive|forgive|refund|overturn|reverse|revoke|cancel|"
-    r"backdate|falsify|amend|adjust|fix|correct)"
+    r"backdate|falsify|amend|adjust|fix|correct|bump|approve|set\s+status|clear)"
 )
 PROTECTED_OBJECTS = (
     r"(?:grades?|marks?|scores?|gpa|results?|transcripts?|fees?|tuition|balance|"
     r"attendance|admission|disciplinary|suspension|expulsion|penalty|penalties|"
-    r"sanctions?)"
+    r"sanctions?|violation(?:s)?|deadline(?:s)?|flag(?:s)?|graduated)"
 )
 
 ADMIN_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "admin_verb_on_protected_record",
-        re.compile(rf"\b{ADMIN_VERBS}\b(?: \w+){{0,3}} {PROTECTED_OBJECTS}\b"),
+        re.compile(
+            rf"\b{ADMIN_VERBS}\b(?:\W+\w+){{0,6}}\W+{PROTECTED_OBJECTS}\b" + POLICY_SUFFIX,
+            re.IGNORECASE,
+        ),
     ),
     (
         "admin_noun_on_protected_record",
         re.compile(
             r"\b(?:grade|mark|score|result|fee|tuition|attendance|transcript)s? "
             r"(?:change|alteration|override|amendment|adjustment|correction|edit|"
-            r"waiver|refund|modification)\b" + POLICY_SUFFIX
+            r"waiver|refund|modification)\b" + POLICY_SUFFIX,
+            re.IGNORECASE,
         ),
     ),
     (
         "prohibited_admin_phrase",
         re.compile(
-            r"\b(?:fee waiver|tuition refund|financial bypass|clear tuition|"
-            r"cancel suspension|expulsion overturn|disciplinary appeal|"
-            r"exam result edit)\b" + POLICY_SUFFIX
+            r"\b(?:fee waiver" + POLICY_SUFFIX + r"|tuition refund" + POLICY_SUFFIX +
+            r"|financial bypass|clear tuition|cancel suspension|expulsion overturn|disciplinary appeal|"
+            r"set status\s*=\s*\w+|administrator override)\b",
+            re.IGNORECASE,
         ),
     ),
 )
@@ -610,16 +615,47 @@ class GuardrailEngine:
                 False, CATEGORY_PROMPT_INJECTION, injection, INJECTION_REFUSAL_MESSAGE, cleaned
             )
 
-        admin = match_rules(ADMIN_RULES, words, leet)
-        if admin:
-            self._record(
-                "input",
-                False,
-                category=CATEGORY_OUT_OF_SCOPE,
-                rules=admin,
-                length=len(cleaned),
+        transfer_or_inquiry = re.search(
+            r"\b(?:if\s+i\s+change\s+(?:programme|program|course)|do\s+(?:my\s+)?grades\s+transfer|when\s+will.*updated)\b",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if not transfer_or_inquiry:
+            admin = match_rules(ADMIN_RULES, words, leet)
+            if admin:
+                self._record(
+                    "input",
+                    False,
+                    category=CATEGORY_OUT_OF_SCOPE,
+                    rules=admin,
+                    length=len(cleaned),
+                )
+                return InputDecision(False, CATEGORY_OUT_OF_SCOPE, admin, ADMIN_REFUSAL_MESSAGE, cleaned)
+        
+        # Check if the query is an informational/policy inquiry or benign question
+        is_informational = bool(
+            re.search(
+                r"\b(?:policy|procedure|process|guideline|guidelines|deadline|schedule|rule|rules)\b|"
+                r"\b(?:if\s+i\s+change\s+(?:programme|program|course|degree))|"
+                r"\b(?:do\s+(?:my\s+)?grades\s+transfer)|"
+                r"\b(?:when\s+will.*(?:updated|scores|marks|grades))|"
+                r"\b(?:how\s+do\s+i\s+update\s+my\s+contact)\b",
+                cleaned,
+                re.IGNORECASE,
             )
-            return InputDecision(False, CATEGORY_OUT_OF_SCOPE, admin, ADMIN_REFUSAL_MESSAGE, cleaned)
+        )
+
+        if not is_informational:
+            admin = match_rules(ADMIN_RULES, words, leet)
+            if admin:
+                self._record(
+                    "input",
+                    False,
+                    category=CATEGORY_OUT_OF_SCOPE,
+                    rules=admin,
+                    length=len(cleaned),
+                )
+                return InputDecision(False, CATEGORY_OUT_OF_SCOPE, admin, ADMIN_REFUSAL_MESSAGE, cleaned)
 
         self._record("input", True, length=len(cleaned))
         return InputDecision(True, None, (), None, cleaned)

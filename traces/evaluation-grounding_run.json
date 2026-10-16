@@ -1,0 +1,723 @@
+{
+  "trace_version": "1.0",
+  "trace_name": "evaluation-grounding_run",
+  "session_id": "evaluation-grounding",
+  "timestamp": 1792088652.1650429,
+  "status": "success",
+  "escalation_required": false,
+  "iterations": 2,
+  "prompt_template_hash": "e9eba301b079eee70de5d7d84f075291eef9ff4a7c98521b95bfdbe1756b6345",
+  "token_usage": {
+    "prompt": 92,
+    "completion": 79,
+    "total": 171
+  },
+  "latencies_ms": {
+    "model": 5441.5318965911865,
+    "tools": 0.0,
+    "total": 5455.146551132202
+  },
+  "rag_evidence": [
+    {
+      "rank": 1,
+      "document": "Examination Regulations 2026",
+      "citation": "",
+      "text_sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+      "text_length": 72
+    }
+  ],
+  "spans": [
+    {
+      "span_id": "span-001",
+      "span_type": "prompt",
+      "name": "prompt.prepare",
+      "status": "ok",
+      "latency_ms": 0.0,
+      "attributes": {
+        "template_sha256": "e9eba301b079eee70de5d7d84f075291eef9ff4a7c98521b95bfdbe1756b6345",
+        "query_sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+        "query_length": 89
+      }
+    },
+    {
+      "span_id": "span-002",
+      "span_type": "retrieval_context",
+      "name": "rag.context_selected",
+      "status": "ok",
+      "latency_ms": 0.0,
+      "attributes": {
+        "passage_count": 1,
+        "sources": [
+          {
+            "rank": 1,
+            "document": "Examination Regulations 2026",
+            "citation": "",
+            "text_sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+            "text_length": 72
+          }
+        ]
+      }
+    },
+    {
+      "span_id": "span-003",
+      "span_type": "retrieval",
+      "name": "rag.retrieve",
+      "status": "ok",
+      "latency_ms": 0.0,
+      "attributes": {
+        "parameters": {
+          "query": {
+            "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+            "length": 89
+          }
+        },
+        "return_payload": [
+          {
+            "text": {
+              "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+              "length": 72
+            },
+            "citation": "",
+            "doc": "Examination Regulations 2026"
+          }
+        ]
+      }
+    },
+    {
+      "span_id": "span-004",
+      "span_type": "model",
+      "name": "model.generate_response",
+      "status": "success",
+      "latency_ms": 5441.532,
+      "attributes": {
+        "model": "gemini-3.5-flash-lite",
+        "prompt_tokens": 92,
+        "completion_tokens": 79,
+        "total_tokens": 171,
+        "response_sha256": "52410c33ba2e8f735c045358576c3ae8e4a0014d0534c5345dd5875a4ba35b78",
+        "response_length": 319
+      }
+    }
+  ],
+  "events": [
+    {
+      "event": "state_transition",
+      "session_id": "evaluation-grounding",
+      "from_step": "sense",
+      "to_step": "plan",
+      "snapshot": {
+        "goal": {
+          "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+          "length": 89
+        },
+        "current_step": "plan",
+        "status": "running",
+        "iteration_count": 1,
+        "max_iterations": 3,
+        "session_id": "evaluation-grounding",
+        "student_id": {
+          "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+          "type": "pseudonymous_identifier"
+        },
+        "context_snippets": [],
+        "plan_history": [],
+        "tool_observations": [],
+        "timestamp": "2026-10-15T18:24:06.715+00:00"
+      }
+    },
+    {
+      "event": "iteration_start",
+      "iteration": 1,
+      "max_iterations": 3
+    },
+    {
+      "event": "plan",
+      "iteration": 1,
+      "plan": {
+        "action": "RETRIEVE_KNOWLEDGE",
+        "query": {
+          "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+          "length": 89
+        }
+      }
+    },
+    {
+      "event": "state_transition",
+      "session_id": "evaluation-grounding",
+      "from_step": "plan",
+      "to_step": "act",
+      "snapshot": {
+        "goal": {
+          "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+          "length": 89
+        },
+        "current_step": "act",
+        "status": "running",
+        "iteration_count": 1,
+        "max_iterations": 3,
+        "session_id": "evaluation-grounding",
+        "student_id": {
+          "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+          "type": "pseudonymous_identifier"
+        },
+        "context_snippets": [],
+        "plan_history": [
+          {
+            "iteration": 1,
+            "action": "RETRIEVE_KNOWLEDGE",
+            "tool_name": null,
+            "tool_params": {
+              "query": {
+                "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+                "length": 89
+              }
+            },
+            "rationale": "Selected RETRIEVE_KNOWLEDGE during iteration 1",
+            "is_replan": false,
+            "timestamp": "2026-10-15T18:24:06.716+00:00"
+          }
+        ],
+        "tool_observations": [],
+        "timestamp": "2026-10-15T18:24:06.716+00:00"
+      }
+    },
+    {
+      "event": "pre_tool_snapshot",
+      "snapshot": {
+        "goal": {
+          "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+          "length": 89
+        },
+        "current_step": "act",
+        "status": "running",
+        "iteration_count": 1,
+        "max_iterations": 3,
+        "session_id": "evaluation-grounding",
+        "student_id": {
+          "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+          "type": "pseudonymous_identifier"
+        },
+        "context_snippets": [],
+        "plan_history": [
+          {
+            "iteration": 1,
+            "action": "RETRIEVE_KNOWLEDGE",
+            "tool_name": null,
+            "tool_params": {
+              "query": {
+                "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+                "length": 89
+              }
+            },
+            "rationale": "Selected RETRIEVE_KNOWLEDGE during iteration 1",
+            "is_replan": false,
+            "timestamp": "2026-10-15T18:24:06.716+00:00"
+          }
+        ],
+        "tool_observations": [],
+        "timestamp": "2026-10-15T18:24:06.716+00:00"
+      }
+    },
+    {
+      "event": "tool_start",
+      "tool": "retriever"
+    },
+    {
+      "event": "tool_end",
+      "tool": "retriever",
+      "status": "ok",
+      "latency_ms": 0.0
+    },
+    {
+      "event": "state_transition",
+      "session_id": "evaluation-grounding",
+      "from_step": "act",
+      "to_step": "observe",
+      "snapshot": {
+        "goal": {
+          "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+          "length": 89
+        },
+        "current_step": "observe",
+        "status": "running",
+        "iteration_count": 1,
+        "max_iterations": 3,
+        "session_id": "evaluation-grounding",
+        "student_id": {
+          "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+          "type": "pseudonymous_identifier"
+        },
+        "context_snippets": [
+          {
+            "text": {
+              "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+              "length": 72
+            },
+            "citation": "",
+            "doc": "Examination Regulations 2026"
+          }
+        ],
+        "plan_history": [
+          {
+            "iteration": 1,
+            "action": "RETRIEVE_KNOWLEDGE",
+            "tool_name": null,
+            "tool_params": {
+              "query": {
+                "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+                "length": 89
+              }
+            },
+            "rationale": "Selected RETRIEVE_KNOWLEDGE during iteration 1",
+            "is_replan": false,
+            "timestamp": "2026-10-15T18:24:06.716+00:00"
+          }
+        ],
+        "tool_observations": [],
+        "timestamp": "2026-10-15T18:24:06.716+00:00"
+      }
+    },
+    {
+      "event": "post_tool_snapshot",
+      "snapshot": {
+        "goal": {
+          "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+          "length": 89
+        },
+        "current_step": "observe",
+        "status": "running",
+        "iteration_count": 1,
+        "max_iterations": 3,
+        "session_id": "evaluation-grounding",
+        "student_id": {
+          "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+          "type": "pseudonymous_identifier"
+        },
+        "context_snippets": [
+          {
+            "text": {
+              "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+              "length": 72
+            },
+            "citation": "",
+            "doc": "Examination Regulations 2026"
+          }
+        ],
+        "plan_history": [
+          {
+            "iteration": 1,
+            "action": "RETRIEVE_KNOWLEDGE",
+            "tool_name": null,
+            "tool_params": {
+              "query": {
+                "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+                "length": 89
+              }
+            },
+            "rationale": "Selected RETRIEVE_KNOWLEDGE during iteration 1",
+            "is_replan": false,
+            "timestamp": "2026-10-15T18:24:06.716+00:00"
+          }
+        ],
+        "tool_observations": [
+          {
+            "iteration": 1,
+            "tool": "retriever",
+            "params": {
+              "query": {
+                "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+                "length": 89
+              }
+            },
+            "status": "ok",
+            "result": [
+              {
+                "text": {
+                  "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+                  "length": 72
+                },
+                "citation": "",
+                "doc": "Examination Regulations 2026"
+              }
+            ],
+            "latency_ms": 0.0,
+            "timestamp": "2026-10-15T18:24:06.716+00:00"
+          }
+        ],
+        "timestamp": "2026-10-15T18:24:06.716+00:00"
+      }
+    },
+    {
+      "event": "state_transition",
+      "session_id": "evaluation-grounding",
+      "from_step": "observe",
+      "to_step": "replan",
+      "snapshot": {
+        "goal": {
+          "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+          "length": 89
+        },
+        "current_step": "replan",
+        "status": "running",
+        "iteration_count": 2,
+        "max_iterations": 3,
+        "session_id": "evaluation-grounding",
+        "student_id": {
+          "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+          "type": "pseudonymous_identifier"
+        },
+        "context_snippets": [
+          {
+            "text": {
+              "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+              "length": 72
+            },
+            "citation": "",
+            "doc": "Examination Regulations 2026"
+          }
+        ],
+        "plan_history": [
+          {
+            "iteration": 1,
+            "action": "RETRIEVE_KNOWLEDGE",
+            "tool_name": null,
+            "tool_params": {
+              "query": {
+                "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+                "length": 89
+              }
+            },
+            "rationale": "Selected RETRIEVE_KNOWLEDGE during iteration 1",
+            "is_replan": false,
+            "timestamp": "2026-10-15T18:24:06.716+00:00"
+          }
+        ],
+        "tool_observations": [
+          {
+            "iteration": 1,
+            "tool": "retriever",
+            "params": {
+              "query": {
+                "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+                "length": 89
+              }
+            },
+            "status": "ok",
+            "result": [
+              {
+                "text": {
+                  "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+                  "length": 72
+                },
+                "citation": "",
+                "doc": "Examination Regulations 2026"
+              }
+            ],
+            "latency_ms": 0.0,
+            "timestamp": "2026-10-15T18:24:06.716+00:00"
+          }
+        ],
+        "timestamp": "2026-10-15T18:24:06.716+00:00"
+      }
+    },
+    {
+      "event": "iteration_start",
+      "iteration": 2,
+      "max_iterations": 3
+    },
+    {
+      "event": "plan",
+      "iteration": 2,
+      "plan": {
+        "action": "FINAL_SYNTHESIS"
+      }
+    },
+    {
+      "event": "output_guardrail_check",
+      "modified": false,
+      "leaked": false,
+      "hallucinated_citations": [],
+      "rules": []
+    },
+    {
+      "event": "state_transition",
+      "session_id": "evaluation-grounding",
+      "from_step": "replan",
+      "to_step": "stop",
+      "snapshot": {
+        "goal": {
+          "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+          "length": 89
+        },
+        "current_step": "stop",
+        "status": "success",
+        "iteration_count": 2,
+        "max_iterations": 3,
+        "session_id": "evaluation-grounding",
+        "student_id": {
+          "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+          "type": "pseudonymous_identifier"
+        },
+        "context_snippets": [
+          {
+            "text": {
+              "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+              "length": 72
+            },
+            "citation": "",
+            "doc": "Examination Regulations 2026"
+          }
+        ],
+        "plan_history": [
+          {
+            "iteration": 1,
+            "action": "RETRIEVE_KNOWLEDGE",
+            "tool_name": null,
+            "tool_params": {
+              "query": {
+                "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+                "length": 89
+              }
+            },
+            "rationale": "Selected RETRIEVE_KNOWLEDGE during iteration 1",
+            "is_replan": false,
+            "timestamp": "2026-10-15T18:24:06.716+00:00"
+          },
+          {
+            "iteration": 2,
+            "action": "FINAL_SYNTHESIS",
+            "tool_name": null,
+            "tool_params": {},
+            "rationale": "Selected FINAL_SYNTHESIS during iteration 2",
+            "is_replan": true,
+            "timestamp": "2026-10-15T18:24:06.716+00:00"
+          }
+        ],
+        "tool_observations": [
+          {
+            "iteration": 1,
+            "tool": "retriever",
+            "params": {
+              "query": {
+                "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+                "length": 89
+              }
+            },
+            "status": "ok",
+            "result": [
+              {
+                "text": {
+                  "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+                  "length": 72
+                },
+                "citation": "",
+                "doc": "Examination Regulations 2026"
+              }
+            ],
+            "latency_ms": 0.0,
+            "timestamp": "2026-10-15T18:24:06.716+00:00"
+          }
+        ],
+        "timestamp": "2026-10-15T18:24:12.160+00:00"
+      }
+    }
+  ],
+  "snapshots": [
+    {
+      "goal": {
+        "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+        "length": 89
+      },
+      "current_step": "sense",
+      "status": "running",
+      "iteration_count": 0,
+      "max_iterations": 3,
+      "session_id": "evaluation-grounding",
+      "student_id": {
+        "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+        "type": "pseudonymous_identifier"
+      },
+      "context_snippets": [],
+      "plan_history": [],
+      "tool_observations": [],
+      "timestamp": "2026-10-15T18:24:06.705+00:00"
+    },
+    {
+      "goal": {
+        "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+        "length": 89
+      },
+      "current_step": "act",
+      "status": "running",
+      "iteration_count": 1,
+      "max_iterations": 3,
+      "session_id": "evaluation-grounding",
+      "student_id": {
+        "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+        "type": "pseudonymous_identifier"
+      },
+      "context_snippets": [],
+      "plan_history": [
+        {
+          "iteration": 1,
+          "action": "RETRIEVE_KNOWLEDGE",
+          "tool_name": null,
+          "tool_params": {
+            "query": {
+              "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+              "length": 89
+            }
+          },
+          "rationale": "Selected RETRIEVE_KNOWLEDGE during iteration 1",
+          "is_replan": false,
+          "timestamp": "2026-10-15T18:24:06.716+00:00"
+        }
+      ],
+      "tool_observations": [],
+      "timestamp": "2026-10-15T18:24:06.716+00:00"
+    },
+    {
+      "goal": {
+        "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+        "length": 89
+      },
+      "current_step": "observe",
+      "status": "running",
+      "iteration_count": 1,
+      "max_iterations": 3,
+      "session_id": "evaluation-grounding",
+      "student_id": {
+        "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+        "type": "pseudonymous_identifier"
+      },
+      "context_snippets": [
+        {
+          "text": {
+            "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+            "length": 72
+          },
+          "citation": "",
+          "doc": "Examination Regulations 2026"
+        }
+      ],
+      "plan_history": [
+        {
+          "iteration": 1,
+          "action": "RETRIEVE_KNOWLEDGE",
+          "tool_name": null,
+          "tool_params": {
+            "query": {
+              "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+              "length": 89
+            }
+          },
+          "rationale": "Selected RETRIEVE_KNOWLEDGE during iteration 1",
+          "is_replan": false,
+          "timestamp": "2026-10-15T18:24:06.716+00:00"
+        }
+      ],
+      "tool_observations": [
+        {
+          "iteration": 1,
+          "tool": "retriever",
+          "params": {
+            "query": {
+              "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+              "length": 89
+            }
+          },
+          "status": "ok",
+          "result": [
+            {
+              "text": {
+                "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+                "length": 72
+              },
+              "citation": "",
+              "doc": "Examination Regulations 2026"
+            }
+          ],
+          "latency_ms": 0.0,
+          "timestamp": "2026-10-15T18:24:06.716+00:00"
+        }
+      ],
+      "timestamp": "2026-10-15T18:24:06.716+00:00"
+    },
+    {
+      "goal": {
+        "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+        "length": 89
+      },
+      "current_step": "stop",
+      "status": "success",
+      "iteration_count": 2,
+      "max_iterations": 3,
+      "session_id": "evaluation-grounding",
+      "student_id": {
+        "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+        "type": "pseudonymous_identifier"
+      },
+      "context_snippets": [
+        {
+          "text": {
+            "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+            "length": 72
+          },
+          "citation": "",
+          "doc": "Examination Regulations 2026"
+        }
+      ],
+      "plan_history": [
+        {
+          "iteration": 1,
+          "action": "RETRIEVE_KNOWLEDGE",
+          "tool_name": null,
+          "tool_params": {
+            "query": {
+              "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+              "length": 89
+            }
+          },
+          "rationale": "Selected RETRIEVE_KNOWLEDGE during iteration 1",
+          "is_replan": false,
+          "timestamp": "2026-10-15T18:24:06.716+00:00"
+        },
+        {
+          "iteration": 2,
+          "action": "FINAL_SYNTHESIS",
+          "tool_name": null,
+          "tool_params": {},
+          "rationale": "Selected FINAL_SYNTHESIS during iteration 2",
+          "is_replan": true,
+          "timestamp": "2026-10-15T18:24:06.716+00:00"
+        }
+      ],
+      "tool_observations": [
+        {
+          "iteration": 1,
+          "tool": "retriever",
+          "params": {
+            "query": {
+              "sha256": "6cd62363bc33408bd70e3fe78a7fb3b377dec23cc7c6e7d40865b1a4bf1ecaa7",
+              "length": 89
+            }
+          },
+          "status": "ok",
+          "result": [
+            {
+              "text": {
+                "sha256": "aafb6ec0ff2a8c556d46ac9a2feb4f6e537a7fea96edf3183c1debffce9d3c13",
+                "length": 72
+              },
+              "citation": "",
+              "doc": "Examination Regulations 2026"
+            }
+          ],
+          "latency_ms": 0.0,
+          "timestamp": "2026-10-15T18:24:06.716+00:00"
+        }
+      ],
+      "timestamp": "2026-10-15T18:24:12.160+00:00"
+    }
+  ]
+}

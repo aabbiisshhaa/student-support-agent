@@ -700,10 +700,6 @@ def test_fc09_floor_paraphrased_admin_request_changes_nothing(
     assert "has been waived" not in result["response"].lower()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FC-09 open: keyword list misses paraphrases; GuardrailEngine not wired in",
-)
 @pytest.mark.parametrize("request_text", ADMIN_PARAPHRASES)
 def test_fc09_target_paraphrased_admin_request_is_refused(build_agent, request_text):
     """FC-09 target (Boundary Matrix row 5): refuse and escalate at iteration 0."""
@@ -724,10 +720,6 @@ def test_fc09_guardrail_engine_already_blocks_the_delete_variant():
     assert decision.category == CATEGORY_OUT_OF_SCOPE
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FC-09 open: ADMIN_RULES do not cover waive/expunge/approve/SET STATUS/bump",
-)
 @pytest.mark.parametrize(
     "request_text",
     [text for text in ADMIN_PARAPHRASES if not text.startswith("Delete")],
@@ -762,10 +754,6 @@ def test_fc10_floor_guardrail_engine_detects_the_injection():
     assert decision.category == CATEGORY_PROMPT_INJECTION
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FC-10 open: run() never calls GuardrailEngine.screen_input",
-)
 def test_fc10_target_injection_is_refused_before_any_tool(build_agent):
     agent = build_agent()
     result = agent.run("fc10-target", INJECTION)
@@ -840,10 +828,6 @@ def test_fc12_guardrail_engine_allows_the_portal_question():
     assert GuardrailEngine().screen_input(LEGITIMATE_QUESTIONS[0]).allowed is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="FC-12 open: is_grade_tampering matches any grade word plus any verb",
-)
 @pytest.mark.parametrize("question", LEGITIMATE_QUESTIONS)
 def test_fc12_target_legitimate_question_is_answered(build_agent, question):
     agent = build_agent()
