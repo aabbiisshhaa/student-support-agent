@@ -65,10 +65,40 @@ class AgentLoopTestCase(IsolatedToolsTestCase):
 
         self.agent = SupportAgentOrchestrator(memory_manager=SessionMemoryManager(persist=False))
 
+    def submit_ticket(self, session_id: str, message: str = TICKET_REQUEST, **kwargs) -> dict:
+        """Request a ticket, then confirm the draft the agent shows (FC-13)."""
+
+        draft = self.agent.run(session_id, message, **kwargs)
+        self.assertEqual(draft["tool_calls"], [])
+        return self.agent.run(session_id, "yes", **kwargs)
+
 
 class TestTicketCreationFromAgentLoop(AgentLoopTestCase):
+    def test_ticket_request_only_drafts_until_the_student_confirms(self) -> None:
+        draft = self.agent.run("session-ticket", TICKET_REQUEST)
+
+        self.assertEqual(draft["status"], "escalated")
+        self.assertEqual(draft["tool_calls"], [])
+        self.assertIn("Reply **yes** to submit", draft["response"])
+        self.assertIsNone(get_ticket("TCK-000001"))
+
+    def test_declined_draft_creates_no_ticket(self) -> None:
+        self.agent.run("session-ticket", TICKET_REQUEST)
+        result = self.agent.run("session-ticket", "no")
+
+        self.assertEqual(result["tool_calls"], [])
+        self.assertIn("not submitted", result["response"])
+        self.assertIsNone(get_ticket("TCK-000001"))
+
+    def test_another_student_cannot_confirm_the_draft(self) -> None:
+        self.agent.run("session-ticket", TICKET_REQUEST)
+        result = self.agent.run("session-ticket", "yes", student_id="2300798765")
+
+        self.assertNotIn("create_support_ticket", [call["tool"] for call in result["tool_calls"]])
+        self.assertIsNone(get_ticket("TCK-000001"))
+
     def test_ticket_request_returns_created_ticket_payload(self) -> None:
-        result = self.agent.run("session-ticket", TICKET_REQUEST)
+        result = self.submit_ticket("session-ticket")
 
         self.assertEqual(result["status"], "escalated")
         self.assertTrue(result["escalation_required"])
@@ -88,7 +118,7 @@ class TestTicketCreationFromAgentLoop(AgentLoopTestCase):
         self.assertIn(ticket["ticket_id"], result["response"])
 
     def test_created_ticket_payload_matches_the_stored_record(self) -> None:
-        result = self.agent.run("session-ticket", TICKET_REQUEST)
+        result = self.submit_ticket("session-ticket")
 
         ticket = result["tool_calls"][0]["result"]
         self.assertEqual(get_ticket(ticket["ticket_id"]), ticket)
@@ -101,7 +131,7 @@ class TestTicketCreationFromAgentLoop(AgentLoopTestCase):
             "execute",
             wraps=orchestrator_module.tool_registry.execute,
         ) as execute:
-            self.agent.run("session-ticket", TICKET_REQUEST)
+            self.submit_ticket("session-ticket")
 
         execute.assert_called_once_with(
             "create_support_ticket",
@@ -116,12 +146,12 @@ class TestTicketCreationFromAgentLoop(AgentLoopTestCase):
         )
 
     def test_ticket_uses_the_student_number_of_the_session(self) -> None:
-        result = self.agent.run("session-ticket", TICKET_REQUEST, student_id="2300798765")
+        result = self.submit_ticket("session-ticket", student_id="2300798765")
 
         self.assertEqual(result["tool_calls"][0]["result"]["student_id"], "2300798765")
 
     def test_short_escalation_message_still_creates_a_ticket(self) -> None:
-        result = self.agent.run("session-short", "escalate")
+        result = self.submit_ticket("session-short", "escalate")
 
         call = result["tool_calls"][0]
         self.assertEqual(call["status"], "ok")
@@ -130,8 +160,8 @@ class TestTicketCreationFromAgentLoop(AgentLoopTestCase):
         self.assertEqual(call["result"]["original_message"], "escalate")
 
     def test_each_ticket_receives_a_distinct_sequential_id(self) -> None:
-        first = self.agent.run("session-one", TICKET_REQUEST)
-        second = self.agent.run("session-two", "Please lodge a complaint about the library opening hours")
+        first = self.submit_ticket("session-one")
+        second = self.submit_ticket("session-two", "Please lodge a complaint about the library opening hours")
 
         ticket_ids = [
             first["tool_calls"][0]["result"]["ticket_id"],
@@ -150,6 +180,8 @@ class TestTicketCreationFromAgentLoop(AgentLoopTestCase):
         events = []
 
         self.agent.run("session-events", TICKET_REQUEST, on_event=events.append)
+        self.assertEqual(events, [])
+        self.agent.run("session-events", "yes", on_event=events.append)
 
         self.assertEqual(
             [(event["event"], event["tool"]) for event in events],
@@ -164,6 +196,7 @@ class TestTicketArgumentEnums(AgentLoopTestCase):
         ticket = self.agent._dispatch_tool(
             "create_support_ticket",
             self.ticket_arguments(category="Administrative", priority=TicketPriority.HIGH),
+            human_confirmed=True,
         )
 
         self.assertEqual(ticket["category"], "administrative")
@@ -175,9 +208,19 @@ class TestTicketArgumentEnums(AgentLoopTestCase):
         outcome = self.agent._dispatch_tool(
             "create_support_ticket",
             self.ticket_arguments(category="finance"),
+            human_confirmed=True,
         )
 
         self.assertIn("Invalid category", outcome["error"])
+
+    def test_dispatch_ignores_a_confirmation_flag_inside_the_params(self) -> None:
+        outcome = self.agent._dispatch_tool(
+            "create_support_ticket",
+            self.ticket_arguments(student_confirmed=True),
+        )
+
+        self.assertEqual(outcome["rule"], "human_approval_required")
+        self.assertIsNone(get_ticket("TCK-000001"))
 
     def test_tool_rejects_capitalised_category(self) -> None:
         with self.assertRaises(TicketValidationError):

@@ -294,10 +294,23 @@ class TestProcessTurn(AppTestCase):
         self.agent = SupportAgentOrchestrator(memory_manager=self.memory)
         self.token, self.student_id, _ = app.open_session(self.memory, None, None)
 
+    def request_ticket(self) -> str:
+        """First turn of the FC-13 flow: the agent only shows a draft."""
+
+        return app.process_turn(self.agent, self.token, self.student_id, TICKET_REQUEST, on_event=None)
+
+    def test_ticket_request_shows_a_draft_and_writes_nothing(self) -> None:
+        reply = self.request_ticket()
+
+        self.assertIn("Reply yes to submit", reply)
+        self.assertNotIn("Ticket confirmation", reply)
+        self.assertIsNone(get_ticket("TCK-000001"))
+
     def test_ticket_request_prints_the_confirmation_with_the_created_id(self) -> None:
         events = []
 
-        reply = app.process_turn(self.agent, self.token, self.student_id, TICKET_REQUEST, on_event=events.append)
+        self.request_ticket()
+        reply = app.process_turn(self.agent, self.token, self.student_id, "yes", on_event=events.append)
 
         self.assertIn("TCK-000001", reply)
         self.assertIn("Ticket confirmation", reply)
@@ -315,8 +328,9 @@ class TestProcessTurn(AppTestCase):
     def test_history_keeps_the_confirmation_the_student_saw_not_the_model_wording(self) -> None:
         model_wording = "I created TCK-000001. Our support team will reach out to you shortly."
 
+        self.request_ticket()
         with patch.object(self.agent, "_synthesize_response", return_value=model_wording):
-            reply = app.process_turn(self.agent, self.token, self.student_id, TICKET_REQUEST, on_event=None)
+            reply = app.process_turn(self.agent, self.token, self.student_id, "yes", on_event=None)
 
         stored = self.memory.get_session(self.token).messages[-1]
         self.assertEqual(stored.role, "assistant")
@@ -325,7 +339,8 @@ class TestProcessTurn(AppTestCase):
         self.assertEqual(reply, f"Agent: {stored.content}")
 
     def test_history_shows_the_confirmation_without_a_doubled_speaker_label(self) -> None:
-        app.process_turn(self.agent, self.token, self.student_id, TICKET_REQUEST, on_event=None)
+        self.request_ticket()
+        app.process_turn(self.agent, self.token, self.student_id, "yes", on_event=None)
 
         history = app.format_history(self.memory.get_session(self.token))
 
@@ -344,8 +359,9 @@ class TestProcessTurn(AppTestCase):
     def test_failed_ticket_leaves_the_agent_text_in_history(self) -> None:
         failure = {"error": "summary must be a string between 10 and 500 characters"}
 
+        self.request_ticket()
         with patch.object(self.agent, "_dispatch_tool", return_value=failure):
-            app.process_turn(self.agent, self.token, self.student_id, TICKET_REQUEST, on_event=None)
+            app.process_turn(self.agent, self.token, self.student_id, "yes", on_event=None)
 
         stored = self.memory.get_session(self.token).messages[-1]
 
@@ -385,7 +401,7 @@ class TestRunCli(AppTestCase):
         self.assertNotIn("**", output)
 
     def test_ticket_request_prints_the_multi_part_confirmation(self) -> None:
-        _, output, _ = self.run_cli([TICKET_REQUEST, "exit"])
+        _, output, _ = self.run_cli([TICKET_REQUEST, "yes", "exit"])
 
         self.assertIn("[..] Creating your support ticket", output)
         self.assertIn("[ok] Support ticket created", output)

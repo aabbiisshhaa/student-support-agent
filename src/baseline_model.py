@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from pathlib import Path
 from time import perf_counter
 
@@ -18,9 +19,41 @@ load_dotenv(PROJECT_ROOT / ".env")
 
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
+# Hard cap on one Gemini request. Without it a stalled request blocked a turn
+# for 253 s (traces/STU-005_run.json). On timeout the orchestrator falls back
+# to its deterministic grounded formatter.
+DEFAULT_TIMEOUT_MS = 30_000
+MIN_TIMEOUT_MS = 1_000
+
 
 class ModelAPIError(RuntimeError):
     """Raised when a Gemini API request fails."""
+
+
+def resolve_timeout_ms(value: str | int | None = None) -> int:
+    """Read GEMINI_TIMEOUT_MS, falling back to the default when unset or invalid."""
+
+    raw = value if value is not None else os.getenv("GEMINI_TIMEOUT_MS")
+    try:
+        timeout_ms = int(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_TIMEOUT_MS
+    return max(timeout_ms, MIN_TIMEOUT_MS)
+
+
+@lru_cache(maxsize=4)
+def shared_client(api_key: str, timeout_ms: int) -> genai.Client:
+    """Return one client per key and timeout for the whole process.
+
+    The UI builds a new orchestrator (and so a new GeminiModel) on every turn.
+    Reusing the client keeps its HTTP connection pool, so only the first turn
+    pays the TLS handshake instead of every turn.
+    """
+
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=timeout_ms),
+    )
 
 
 class GeminiModel:
@@ -31,6 +64,7 @@ class GeminiModel:
         api_key: str | None = None,
         model: str | None = None,
         telemetry: Telemetry | None = None,
+        timeout_ms: int | None = None,
     ) -> None:
         resolved_api_key = (
             api_key
@@ -49,8 +83,10 @@ class GeminiModel:
             or DEFAULT_MODEL
         )
 
-        self.client = genai.Client(
-            api_key=resolved_api_key
+        self.timeout_ms = resolve_timeout_ms(timeout_ms)
+        self.client = shared_client(
+            resolved_api_key,
+            self.timeout_ms,
         )
 
         self.telemetry = (
@@ -91,7 +127,9 @@ class GeminiModel:
                 user_message
             )
 
-        except errors.APIError as error:
+        except Exception as error:
+            # APIError carries an HTTP status; a timeout or dropped connection
+            # surfaces as a transport exception and must be recorded too.
             latency_ms = (
                 perf_counter() - started
             ) * 1000
@@ -105,9 +143,16 @@ class GeminiModel:
                 error_type=type(error).__name__,
             )
 
+            if isinstance(error, errors.APIError):
+                raise ModelAPIError(
+                    "Gemini API request failed "
+                    f"with status {error.code}."
+                ) from error
+
             raise ModelAPIError(
                 "Gemini API request failed "
-                f"with status {error.code}."
+                f"({type(error).__name__}) after {latency_ms:.0f} ms; "
+                f"timeout cap is {self.timeout_ms} ms."
             ) from error
 
         latency_ms = (
