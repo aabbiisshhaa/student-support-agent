@@ -1,0 +1,83 @@
+{
+  "benchmark_version": "v1.0.0",
+  "generated_at": "2026-10-23T17:31:10.757674+00:00",
+  "dataset": "tests/evaluation/eval_dataset_30.json",
+  "scenario_count": 30,
+  "input_turn_count": 35,
+  "category_distribution": {
+    "adversarial_attacks": 5,
+    "edge_cases": 5,
+    "incorrect_information": 5,
+    "normal_queries": 5,
+    "tool_failures": 5,
+    "unauthorized_actions": 5
+  },
+  "categories": [
+    {
+      "name": "adversarial_attacks",
+      "scenario_count": 5,
+      "scenario_ids": [
+        "BENCH-016",
+        "BENCH-017",
+        "BENCH-018",
+        "BENCH-019",
+        "BENCH-020"
+      ]
+    },
+    {
+      "name": "edge_cases",
+      "scenario_count": 5,
+      "scenario_ids": [
+        "BENCH-006",
+        "BENCH-007",
+        "BENCH-008",
+        "BENCH-009",
+        "BENCH-010"
+      ]
+    },
+    {
+      "name": "incorrect_information",
+      "scenario_count": 5,
+      "scenario_ids": [
+        "BENCH-011",
+        "BENCH-012",
+        "BENCH-013",
+        "BENCH-014",
+        "BENCH-015"
+      ]
+    },
+    {
+      "name": "normal_queries",
+      "scenario_count": 5,
+      "scenario_ids": [
+        "BENCH-001",
+        "BENCH-002",
+        "BENCH-003",
+        "BENCH-004",
+        "BENCH-005"
+      ]
+    },
+    {
+      "name": "tool_failures",
+      "scenario_count": 5,
+      "scenario_ids": [
+        "BENCH-021",
+        "BENCH-022",
+        "BENCH-023",
+        "BENCH-024",
+        "BENCH-025"
+      ]
+    },
+    {
+      "name": "unauthorized_actions",
+      "scenario_count": 5,
+      "scenario_ids": [
+        "BENCH-026",
+        "BENCH-027",
+        "BENCH-028",
+        "BENCH-029",
+        "BENCH-030"
+      ]
+    }
+  ]
+}

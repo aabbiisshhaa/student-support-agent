@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import json
 import re
+import statistics
 import sys
 import tempfile
 import time
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from types import ModuleType
 from pathlib import Path
 from typing import Any
@@ -19,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-DATASET_PATH = Path(__file__).with_name("eval_dataset_30.json")
+DATASET_PATH = Path(__file__).resolve().with_name("eval_dataset_30.json")
 STUDENT_ID = "2300712345"
 VALID_CATEGORIES = {
     "normal_queries",
@@ -29,6 +32,10 @@ VALID_CATEGORIES = {
     "tool_failures",
     "unauthorized_actions",
 }
+RESULTS_PATH = Path(__file__).with_name("eval_results_v1.json")
+DOCS_EVAL_DIR = ROOT / "docs" / "eval"
+SUMMARY_PATH = DOCS_EVAL_DIR / "benchmark_summary.json"
+EVIDENCE_PATH = DOCS_EVAL_DIR / "final_evidence_pack.md"
 
 
 def load_dataset() -> list[dict[str, Any]]:
@@ -192,11 +199,129 @@ def build_agent() -> Any:
     return agent
 
 
+def percentile(values: list[float], percentile_rank: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = (len(ordered) - 1) * percentile_rank
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    fraction = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+
+
+def write_artifacts(
+    scenarios: list[dict[str, Any]],
+    records: list[dict[str, Any]],
+    totals: dict[str, float],
+    latencies: list[float],
+) -> None:
+    count = len(scenarios)
+    categories = Counter(scenario["category"] for scenario in scenarios)
+    category_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        category_records[record["category"]].append(record)
+
+    p50 = percentile(latencies, 0.50)
+    p90 = percentile(latencies, 0.90)
+    metrics = {
+        "task_completion_rate": round(totals["completion"] / count * 100, 2),
+        "groundedness_score": round(totals["grounding"] / count * 100, 2),
+        "tool_selection_accuracy": round(totals["tools"] / count * 100, 2),
+        "instruction_following_rate": round(totals["instruction"] / count * 100, 2),
+        "safety_violations": {
+            "count": int(totals["safety"]),
+            "rate_percent": round(totals["safety"] / count * 100, 2),
+            "required_count": 0,
+        },
+        "end_to_end_latency": {
+            "p50_seconds": round(p50, 6),
+            "p50_milliseconds": round(p50 * 1000, 3),
+            "p90_seconds": round(percentile(latencies, 0.90), 6),
+            "p90_milliseconds": round(percentile(latencies, 0.90) * 1000, 3),
+            "mean_seconds": round(statistics.mean(latencies), 6),
+        },
+    }
+    generated = datetime.now(timezone.utc).isoformat()
+    result_document = {
+        "benchmark_version": "v1.0.0",
+        "generated_at": generated,
+        "dataset": str(DATASET_PATH.relative_to(ROOT)).replace("\\", "/"),
+        "scenario_count": count,
+        "categories": dict(sorted(categories.items())),
+        "metrics": metrics,
+        "scenarios": records,
+    }
+    summary_document = {
+        "benchmark_version": "v1.0.0",
+        "generated_at": generated,
+        "dataset": str(DATASET_PATH.relative_to(ROOT)).replace("\\", "/"),
+        "scenario_count": count,
+        "input_turn_count": sum(len(scenario["input_turns"]) for scenario in scenarios),
+        "category_distribution": dict(sorted(categories.items())),
+        "categories": [
+            {
+                "name": category,
+                "scenario_count": len(category_records[category]),
+                "scenario_ids": [record["scenario_id"] for record in category_records[category]],
+            }
+            for category in sorted(category_records)
+        ],
+    }
+    DOCS_EVAL_DIR.mkdir(parents=True, exist_ok=True)
+    RESULTS_PATH.write_text(json.dumps(result_document, indent=2) + "\n", encoding="utf-8")
+    SUMMARY_PATH.write_text(json.dumps(summary_document, indent=2) + "\n", encoding="utf-8")
+
+    lines = [
+        "# V1.0.0 Benchmark Evidence Pack",
+        "",
+        f"Generated: `{generated}`",
+        "",
+        "## Scope",
+        "",
+        f"- Dataset: `{summary_document['dataset']}`",
+        f"- Scenarios: **{count}** across **{len(categories)}** mandatory domains",
+        "- Execution mode: deterministic fallback when no Gemini API key is configured",
+        "",
+        "## Aggregate Results",
+        "",
+        "| Metric | Result |",
+        "|---|---:|",
+        f"| Task Completion Rate | {metrics['task_completion_rate']:.2f}% |",
+        f"| Groundedness Score | {metrics['groundedness_score']:.2f}% |",
+        f"| Tool Selection Accuracy | {metrics['tool_selection_accuracy']:.2f}% |",
+        f"| Instruction Following Rate | {metrics['instruction_following_rate']:.2f}% |",
+        f"| End-to-End Latency P50 | {metrics['end_to_end_latency']['p50_milliseconds']:.3f} ms ({metrics['end_to_end_latency']['p50_seconds']:.6f} s) |",
+        f"| End-to-End Latency P90 | {metrics['end_to_end_latency']['p90_milliseconds']:.3f} ms ({metrics['end_to_end_latency']['p90_seconds']:.6f} s) |",
+        f"| Safety Violations | {metrics['safety_violations']['count']} ({metrics['safety_violations']['rate_percent']:.2f}%) |",
+        "",
+        "## Domain Breakdown",
+        "",
+        "| Domain | Scenarios | Completion | Grounding | Tools | Instruction | Safety Violations |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+    ]
+    for category in sorted(category_records):
+        domain = category_records[category]
+        lines.append(
+            f"| {category} | {len(domain)} | "
+            f"{sum(item['scores']['completion'] for item in domain) / len(domain) * 100:.2f}% | "
+            f"{sum(item['scores']['grounding'] for item in domain) / len(domain) * 100:.2f}% | "
+            f"{sum(item['scores']['tools'] for item in domain) / len(domain) * 100:.2f}% | "
+            f"{sum(item['scores']['instruction'] for item in domain) / len(domain) * 100:.2f}% | "
+            f"{int(sum(item['scores']['safety'] for item in domain))} |"
+        )
+    lines.extend(["", "## Raw JSON Test Execution Traces", "", "```json", json.dumps(records, indent=2), "```", ""])
+    EVIDENCE_PATH.write_text("\n".join(lines), encoding="utf-8")
+
+
 def main() -> int:
     scenarios = load_dataset()
     agent = build_agent()
     totals = {"completion": 0.0, "grounding": 0.0, "tools": 0.0, "instruction": 0.0, "safety": 0.0}
-    total_seconds = 0.0
+    latencies: list[float] = []
+    records: list[dict[str, Any]] = []
 
     try:
         for scenario in scenarios:
@@ -204,18 +329,33 @@ def main() -> int:
             scores = score_scenario(scenario, results)
             for metric, value in scores.items():
                 totals[metric] += value
-            total_seconds += elapsed
+            latencies.append(elapsed)
+            records.append({
+                "scenario_id": scenario["scenario_id"],
+                "category": scenario["category"],
+                "description": scenario["description"],
+                "input_turns": scenario["input_turns"],
+                "expected_behavior": scenario["expected_behavior"],
+                "elapsed_seconds": round(elapsed, 6),
+                "scores": scores,
+                "results": results,
+            })
     finally:
         agent._evaluation_tempdir.cleanup()
 
     count = len(scenarios)
+    write_artifacts(scenarios, records, totals, latencies)
+    p50 = percentile(latencies, 0.50)
+    p90 = percentile(latencies, 0.90)
     print(f"Scenarios evaluated: {count}")
     print(f"Task Completion Rate: {totals['completion'] / count * 100:.2f}%")
     print(f"Groundedness / Faithfulness: {totals['grounding'] / count * 100:.2f}%")
     print(f"Tool Selection Accuracy: {totals['tools'] / count * 100:.2f}%")
     print(f"Instruction Following: {totals['instruction'] / count * 100:.2f}%")
-    print(f"End-to-End Latency: {total_seconds / count:.4f} seconds")
+    print(f"End-to-End Latency P50: {p50:.6f} seconds ({p50 * 1000:.3f} ms)")
+    print(f"End-to-End Latency P90: {p90:.6f} seconds ({p90 * 1000:.3f} ms)")
     print(f"Safety Violations: {int(totals['safety'])} / {count} ({totals['safety'] / count * 100:.2f}%)")
+    print(f"Artifacts written: {RESULTS_PATH}, {SUMMARY_PATH}, {EVIDENCE_PATH}")
     return 0
 
 
