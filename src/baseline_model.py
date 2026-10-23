@@ -65,12 +65,27 @@ class GeminiModel:
         model: str | None = None,
         telemetry: Telemetry | None = None,
         timeout_ms: int | None = None,
-    ) -> None:
+        ) -> None:
+        offline_mode = os.getenv(
+            "MODEL_OFFLINE_MODE",
+            "false",
+        ).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+
+        if offline_mode:
+            raise ValueError(
+                "MODEL_OFFLINE_MODE is enabled. "
+                "Using deterministic fallback mode."
+            )
+
         resolved_api_key = (
             api_key
             or os.getenv("GEMINI_API_KEY")
         )
-
         if not resolved_api_key:
             raise ValueError(
                 "GEMINI_API_KEY is missing. "

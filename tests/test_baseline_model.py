@@ -1,6 +1,6 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.baseline_model import GeminiModel
 
@@ -33,6 +33,17 @@ class TestGeminiModel(unittest.TestCase):
     def test_empty_message_is_rejected(self):
         with self.assertRaises(ValueError):
             self.model.generate_response("   ")
+
+    def test_offline_mode_disables_live_model(self):
+        with patch.dict(
+            "os.environ",
+            {"MODEL_OFFLINE_MODE": "true"},
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "deterministic fallback mode",
+            ):
+                GeminiModel(api_key="test-api-key")
 
 
 if __name__ == "__main__":
