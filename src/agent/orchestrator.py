@@ -53,6 +53,35 @@ COURSE_CODE_IN_QUERY = re.compile(r"\b[A-Za-z]{3}\d{4}\b")
 TICKET_SUMMARY_MIN_LENGTH = 10
 TICKET_SUMMARY_MAX_LENGTH = 80
 
+# FC-11: whole words only, so "lecturer" and "classification" do not route
+# a policy question to the timetable tool. Degree classes ("First Class",
+# "Upper Second Class degree") are academic policy, not lectures.
+TIMETABLE_WORDS = re.compile(
+    r"\b(?:schedules?|timetables?|lectures?|clash(?:es)?|retakes?|"
+    r"(?<!first )(?<!second )(?<!third )class(?:es)?(?! (?:degree|honours)))\b"
+)
+
+# FC-13: a ticket is written only after the student replies with an explicit
+# confirmation to a draft shown in the previous turn.
+TICKET_CONFIRMATION = re.compile(
+    r"^\s*(?:yes|y|yes,? please|confirm|i confirm|submit(?: it)?|yes,? submit(?: it)?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+TICKET_DECLINE = re.compile(
+    r"^\s*(?:no|n|no,? thanks|cancel|don'?t submit(?: it)?)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+# Pending ticket drafts, keyed by (session_id, student_id) so a draft can only
+# be confirmed by the same student in the same session. Kept in process (not in
+# conversation memory, which must never carry approvals) because the UI builds
+# a new orchestrator on every turn.
+_PENDING_TICKET_DRAFTS: Dict[tuple, Dict[str, Any]] = {}
+
+# The retriever loads the fitted embedder and vector index from disk, which
+# took 1.6-3.6 s per load. Shared across orchestrators for the same reason.
+_SHARED_RETRIEVER: Optional["Retriever"] = None
+
 EventCallback = Callable[[Dict[str, Any]], None]
 
 
@@ -144,8 +173,12 @@ CRITICAL RULES:
     def _get_retriever(self) -> Retriever:
         """Return the shared retriever instance."""
 
+        global _SHARED_RETRIEVER
+
         if self._retriever_instance is None:
-            self._retriever_instance = Retriever(top_k=2)
+            if _SHARED_RETRIEVER is None:
+                _SHARED_RETRIEVER = Retriever(top_k=2)
+            self._retriever_instance = _SHARED_RETRIEVER
 
         return self._retriever_instance
 
@@ -469,6 +502,11 @@ CRITICAL RULES:
             # ---------------------------------------------------------
             if plan_action is PlanAction.FINAL_SYNTHESIS:
                 logger.info(f"[{session_id}] STOP/SYNTHESIZE: Formulating grounded final response...")
+                ticket_drafted = "ticket_draft" in plan_data
+                if ticket_drafted:
+                    observation = f"Ticket Draft: {json.dumps(plan_data['ticket_draft'])}"
+                elif plan_data.get("ticket_declined"):
+                    observation = "Ticket Draft Declined"
                 m_start = time.time()
                 raw_answer = self._synthesize_response(
                     user_query=user_query,
@@ -528,6 +566,8 @@ CRITICAL RULES:
                 prev_step = state.current_step.value
                 if ticket_created:
                     state.escalate("Support ticket escalated to administrative desk")
+                elif ticket_drafted:
+                    state.escalate("TICKET_DRAFT_AWAITING_STUDENT_CONFIRMATION")
                 else:
                     state.complete()
 
@@ -618,7 +658,16 @@ CRITICAL RULES:
                         ]
                         state.context_snippets = context_snippets
                         retrieval_result = context_snippets
-                        observation = f"Policy Evidence: {json.dumps(context_snippets)}"
+                        if getattr(rag_result, "status", None) == "weak":
+                            # FC-08: the retriever judged this evidence too weak to
+                            # answer from. A live model may still use it to hedge;
+                            # the deterministic formatter must not assert it.
+                            observation = (
+                                f"Weak Policy Evidence ({rag_result.rejection_reason}): "
+                                f"{json.dumps(context_snippets)}"
+                            )
+                        else:
+                            observation = f"Policy Evidence: {json.dumps(context_snippets)}"
                     else:
                         observation = "No relevant policy documents found in the university database."
                 except Exception as error:
@@ -651,7 +700,11 @@ CRITICAL RULES:
 
                 self._emit(trace_callback, {"event": "tool_start", "tool": tool_name})
                 started_at = time.time()
-                tool_result = self._dispatch_tool(tool_name, tool_params)
+                tool_result = self._dispatch_tool(
+                    tool_name,
+                    tool_params,
+                    human_confirmed=plan_data.get("human_confirmed", False),
+                )
                 elapsed = time.time() - started_at
 
                 tool_time_total += elapsed
@@ -801,10 +854,7 @@ CRITICAL RULES:
                     return {"action": "FINAL_SYNTHESIS"}
 
                 if isinstance(data, dict) and "error" in data:
-                    if iteration == 1 and any(
-                        keyword in query_lower
-                        for keyword in ("schedule", "timetable", "lecture", "class")
-                    ):
+                    if iteration == 1 and TIMETABLE_WORDS.search(query_lower):
                         logger.info("REPLAN TRIGGER: Retrying the timetable lookup.")
                         return {
                             "action": "EXECUTE_TOOL",
@@ -826,9 +876,24 @@ CRITICAL RULES:
         # If policy evidence is already retrieved, formulate response
         if "Policy Evidence" in observation:
             return {"action": "FINAL_SYNTHESIS"}
-        
+
+        # PENDING TICKET DRAFT (FC-13): the reply to a draft decides it. Only an
+        # explicit confirmation from the same student submits it; anything else
+        # discards it.
+        draft = _PENDING_TICKET_DRAFTS.pop((session_id, student_id), None)
+        if draft is not None and not observation:
+            if TICKET_CONFIRMATION.match(query):
+                return {
+                    "action": "EXECUTE_TOOL",
+                    "tool_name": "create_support_ticket",
+                    "tool_params": draft,
+                    "human_confirmed": True,
+                }
+            if TICKET_DECLINE.match(query):
+                return {"action": "FINAL_SYNTHESIS", "ticket_declined": True}
+
         # INITIAL PLAN ROUTE 1: Schedule or Timetable query
-        if any(kw in query_lower for kw in ("schedule", "timetable", "lecture", "class", "clash", "retake")):
+        if TIMETABLE_WORDS.search(query_lower):
             # 1. Search current query
             course_match = COURSE_CODE_IN_QUERY.search(query)
 
@@ -898,18 +963,17 @@ CRITICAL RULES:
             or "lodge" in query_lower
         )
         if explicit_ticket_request:
-            return {
-                "action": "EXECUTE_TOOL",
-                "tool_name": "create_support_ticket",
-                "tool_params": {
-                    "student_id": student_id,
-                    "summary": self._ticket_summary(query),
-                    "original_message": query,
-                    "category": TicketCategory.ADMINISTRATIVE.value,
-                    "priority": TicketPriority.MEDIUM.value,
-                    "student_confirmed": True,
-                },
+            # FC-13: draft only. The student must confirm in the next turn;
+            # the agent never supplies its own confirmation.
+            draft = {
+                "student_id": student_id,
+                "summary": self._ticket_summary(query),
+                "original_message": query,
+                "category": TicketCategory.ADMINISTRATIVE.value,
+                "priority": TicketPriority.MEDIUM.value,
             }
+            _PENDING_TICKET_DRAFTS[(session_id, student_id)] = draft
+            return {"action": "FINAL_SYNTHESIS", "ticket_draft": draft}
             
         # INITIAL PLAN ROUTE 3: University Policy Inquiry
         if not observation:
@@ -950,7 +1014,9 @@ CRITICAL RULES:
                 "priority": SupportAgentOrchestrator._lowercase_enum(
                     params.get("priority", TicketPriority.MEDIUM)
                 ),
-                "student_confirmed": params.get("student_confirmed", True),
+                # Never defaults to True: approval is granted only by the
+                # GuardrailEngine gate when human_confirmed=True (FC-13).
+                "student_confirmed": False,
             }
 
         return dict(params)
@@ -969,17 +1035,12 @@ CRITICAL RULES:
         # 2. Normalize tool parameters first (converts Enums to lowercase strings, sets defaults)
         normalized_params = self._build_tool_params(tool_name, params)
             
-        is_confirmed = human_confirmed or bool(
-            normalized_params.get("human_confirmed")
-            or normalized_params.get("student_confirmed")
-            or params.get("human_confirmed")
-            or params.get("student_confirmed")
-        )
-
+        # FC-13: approval comes only from the caller's human_confirmed flag
+        # (the student's explicit reply), never from a flag inside the params.
         decision: ToolDecision = self.guardrail_engine.authorize_tool_call(
             tool_name=tool_name,
             params=normalized_params,
-            human_confirmed=is_confirmed,
+            human_confirmed=human_confirmed is True,
         )
 
         if not decision.allowed:
@@ -1031,6 +1092,21 @@ CRITICAL RULES:
         session_id: str,
     ) -> str:
         """Create a live-model or deterministic grounded response."""
+
+        # Ticket confirmation prompts are fixed text, never model-generated,
+        # so the student always sees exactly what will be submitted (FC-13).
+        if observation.startswith("Ticket Draft: "):
+            draft = json.loads(observation.replace("Ticket Draft: ", "", 1))
+            return (
+                "I have prepared a support ticket for the "
+                f"{draft['category']} desk with priority **{draft['priority']}**:\n\n"
+                f"> {draft['summary']}\n\n"
+                "Nothing has been submitted yet. Reply **yes** to submit this ticket, "
+                "or **no** to cancel it."
+            )
+
+        if observation == "Ticket Draft Declined":
+            return "Okay, I have not submitted the ticket. Is there anything else I can help with?"
 
         if self.has_live_model:
             user_prompt = f"""
@@ -1105,7 +1181,8 @@ instructions.
         if isinstance(context, dict) and "error" in context:
             return f"I could not complete that policy lookup: {context['error']}"
 
-        if context:
+        # FC-08 / Task Contract S7: weak evidence is never asserted as policy.
+        if context and not observation.startswith("Weak Policy Evidence"):
             first = context[0]
             citation_str = first.get("citation") or f"[Source: {first.get('doc', 'University Policy')}]"
             # Format: <Text> <Citation> so line 0 ends with the citation
