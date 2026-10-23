@@ -52,3 +52,95 @@ To maintain software engineering integrity, AI autonomy is strictly bounded:
   - _Responsibilities:_ AI Boundary Matrix compliance, 30-scenario evaluation suite, failure cataloging, guardrails, and corpus provenance.
 - **DevOps / Documentation Lead:** Tusiime Mable
   - _Responsibilities:_ GitHub workflow automation, repository structure, ClickUp workspace tracking, architecture diagrams, and weekly reports.
+
+
+---
+
+## Quickstart
+
+### Requirements
+
+- Python 3.12
+- Docker Desktop with Docker Compose
+- A Gemini API key for online mode
+
+### Environment setup
+
+Create the local environment file:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Add the Gemini API key to `.env` for online operation. Real credentials must never be committed.
+
+For deterministic offline operation, set:
+
+```text
+MODEL_OFFLINE_MODE=true
+```
+
+### Run locally
+
+Install the pinned dependencies:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+Start the CLI:
+
+```powershell
+python src\app.py
+```
+
+Start the Web UI:
+
+```powershell
+streamlit run src\ui\app.py
+```
+
+The Web UI is available at `http://localhost:8501`.
+
+### Run with Docker
+
+Build the images:
+
+```powershell
+docker compose build
+docker compose --profile cli build cli
+```
+
+Start the Web UI:
+
+```powershell
+docker compose up web
+```
+
+Start the interactive CLI:
+
+```powershell
+docker compose --profile cli run --rm cli
+```
+
+Stop the services:
+
+```powershell
+docker compose down
+```
+
+For complete environment configuration, offline-mode instructions, port bindings, troubleshooting and release procedures, see [the deployment runbook](docs/deployment/runbook.md).
+
+## Testing
+
+Run the complete test suite before submitting changes:
+
+```powershell
+python -m pytest -q
+```
+
+## Release
+
+The official release is published from the immutable Git tag `v1.0.0`. The tag must only be created after the deployment pull request has been tested, reviewed and merged into `main`.

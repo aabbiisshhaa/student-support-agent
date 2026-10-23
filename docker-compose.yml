@@ -1,0 +1,42 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    image: student-support-agent-web:1.0.0
+    env_file:
+      - .env
+    environment:
+      MODEL_OFFLINE_MODE: ${MODEL_OFFLINE_MODE:-false}
+    ports:
+      - "8501:8501"
+    volumes:
+      - agent-data:/app/data
+      - agent-logs:/app/logs
+      - agent-traces:/app/traces
+    restart: unless-stopped
+
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cli
+    image: student-support-agent-cli:1.0.0
+    env_file:
+      - .env
+    environment:
+      MODEL_OFFLINE_MODE: ${MODEL_OFFLINE_MODE:-false}
+    volumes:
+      - agent-data:/app/data
+      - agent-logs:/app/logs
+      - agent-traces:/app/traces
+    stdin_open: true
+    tty: true
+    profiles:
+      - cli
+
+volumes:
+  agent-data:
+  agent-logs:
+  agent-traces:
