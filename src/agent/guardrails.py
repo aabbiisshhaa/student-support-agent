@@ -433,7 +433,7 @@ def _check_string(name: str, rule: ParamRule, value: Any) -> str:
             "param_length",
             f"{name} must be {rule.min_length}-{rule.max_length} characters",
         )
-    if _has__characters(value, rule.multiline):
+    if _has_forbidden_characters(value, rule.multiline):
         raise ParamViolation("param_characters", f"{name} contains control characters")
     if rule.pattern is not None and rule.pattern.fullmatch(value) is None:
         raise ParamViolation("param_pattern", f"{name} does not match the required format")
