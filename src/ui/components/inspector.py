@@ -18,18 +18,49 @@ FSM_BADGES = {
 
 
 def render_fsm_badge_row(current_step: str) -> None:
-    """Render the active FSM lifecycle badge row."""
-    step_lower = current_step.lower() if current_step else "sense"
-    cols = st.columns(6)
-    steps = ["sense", "plan", "act", "observe", "replan", "stop"]
+    """Render the active FSM lifecycle badge row cleanly using HTML badges."""
+    step_lower = (current_step or "sense").lower().strip()
     
-    for col, step in zip(cols, steps):
-        badge_text = FSM_BADGES[step]
-        if step == step_lower:
-            col.markdown(f"**`:blue-background[{badge_text}]`**")
-        else:
-            col.markdown(f"<span style='color: gray;'>{badge_text}</span>", unsafe_allow_html=True)
+    # Map any execution status aliases to standard FSM phases
+    status_map = {
+        "idle": "sense",
+        "running": "act",
+        "completed": "stop",
+        "stopped": "stop",
+        "error": "stop",
+    }
+    active_step = status_map.get(step_lower, step_lower)
 
+    badges = [
+        ("sense", "🔍 SENSE"),
+        ("plan", "📋 PLAN"),
+        ("act", "⚡ ACT"),
+        ("observe", "👁 OBSERVE"),
+        ("replan", "🔄 REPLAN"),
+        ("stop", "🛑 STOP"),
+    ]
+
+    badge_html_items = []
+    for step_key, badge_label in badges:
+        if step_key == active_step:
+            # Bright blue pill badge for the active phase
+            badge_html_items.append(
+                f'<span style="background-color: #1d4ed8; color: #ffffff; padding: 4px 10px; '
+                f'border-radius: 9999px; font-weight: 600; font-size: 0.78rem; '
+                f'display: inline-block; margin-right: 6px; box-shadow: 0 0 8px rgba(29, 78, 216, 0.4);">'
+                f'{badge_label}</span>'
+            )
+        else:
+            # Muted gray pill badge for inactive phases
+            badge_html_items.append(
+                f'<span style="background-color: #1e293b; color: #94a3b8; padding: 4px 10px; '
+                f'border-radius: 9999px; font-weight: 500; font-size: 0.78rem; '
+                f'display: inline-block; margin-right: 6px; border: 1px solid #334155;">'
+                f'{badge_label}</span>'
+            )
+
+    row_container = f'<div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px;">{"".join(badge_html_items)}</div>'
+    st.markdown(row_container, unsafe_allow_html=True)            
 
 def render_inspector_panel(events: list[dict[str, Any]], latest_state: dict[str, Any] | None) -> None:
     """Render the inspection side panel."""
