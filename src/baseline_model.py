@@ -22,7 +22,7 @@ DEFAULT_MODEL = "gemini-3.5-flash-lite"
 # Hard cap on one Gemini request. Without it a stalled request blocked a turn
 # for 253 s (traces/STU-005_run.json). On timeout the orchestrator falls back
 # to its deterministic grounded formatter.
-DEFAULT_TIMEOUT_MS = 30_000
+DEFAULT_TIMEOUT_MS = 60_000
 MIN_TIMEOUT_MS = 1_000
 
 

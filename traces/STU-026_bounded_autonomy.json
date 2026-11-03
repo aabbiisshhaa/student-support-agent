@@ -1,0 +1,127 @@
+{
+  "trace_version": "1.0",
+  "trace_name": "STU-026_bounded_autonomy",
+  "session_id": "STU-026",
+  "timestamp": 1793724768.2883484,
+  "status": "escalated",
+  "escalation_required": true,
+  "iterations": 0,
+  "prompt_template_hash": "e9eba301b079eee70de5d7d84f075291eef9ff4a7c98521b95bfdbe1756b6345",
+  "token_usage": {
+    "prompt": 0,
+    "completion": 0,
+    "total": 0
+  },
+  "latencies_ms": {
+    "model": 0.0,
+    "tools": 0.0,
+    "total": 10.563373565673828
+  },
+  "rag_evidence": [],
+  "spans": [
+    {
+      "span_id": "span-001",
+      "span_type": "prompt",
+      "name": "prompt.prepare",
+      "status": "ok",
+      "latency_ms": 0.0,
+      "attributes": {
+        "template_sha256": "e9eba301b079eee70de5d7d84f075291eef9ff4a7c98521b95bfdbe1756b6345",
+        "query_sha256": "602820b40d6a9f218e0da06c486c55a490bed5aff8633e2868b67345a9f53534",
+        "query_length": 82
+      }
+    },
+    {
+      "span_id": "span-002",
+      "span_type": "model",
+      "name": "model.generate_response",
+      "status": "escalated",
+      "latency_ms": 0.0,
+      "attributes": {
+        "model": "gemini-3.5-flash-lite",
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "response_sha256": "e8361f981fa84a83e83d462643a58c7422a2807ba0d6dbf738db9e74d27cff4f",
+        "response_length": 171
+      }
+    }
+  ],
+  "events": [
+    {
+      "event": "state_transition",
+      "session_id": "STU-026",
+      "from_step": "sense",
+      "to_step": "stop",
+      "snapshot": {
+        "goal": {
+          "sha256": "602820b40d6a9f218e0da06c486c55a490bed5aff8633e2868b67345a9f53534",
+          "length": 82
+        },
+        "current_step": "stop",
+        "status": "escalated",
+        "iteration_count": 0,
+        "max_iterations": 3,
+        "session_id": "STU-026",
+        "student_id": {
+          "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+          "type": "pseudonymous_identifier"
+        },
+        "context_snippets": [],
+        "plan_history": [],
+        "tool_observations": [],
+        "timestamp": "2026-11-03T16:52:48.276+00:00"
+      }
+    },
+    {
+      "event": "guardrail_violation",
+      "stage": "input_screening",
+      "violation_type": "prompt_injection",
+      "rules": [
+        "instruction_override"
+      ],
+      "iteration": 0,
+      "session_id": "STU-026"
+    }
+  ],
+  "snapshots": [
+    {
+      "goal": {
+        "sha256": "602820b40d6a9f218e0da06c486c55a490bed5aff8633e2868b67345a9f53534",
+        "length": 82
+      },
+      "current_step": "sense",
+      "status": "running",
+      "iteration_count": 0,
+      "max_iterations": 3,
+      "session_id": "STU-026",
+      "student_id": {
+        "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+        "type": "pseudonymous_identifier"
+      },
+      "context_snippets": [],
+      "plan_history": [],
+      "tool_observations": [],
+      "timestamp": "2026-11-03T16:52:48.276+00:00"
+    },
+    {
+      "goal": {
+        "sha256": "602820b40d6a9f218e0da06c486c55a490bed5aff8633e2868b67345a9f53534",
+        "length": 82
+      },
+      "current_step": "stop",
+      "status": "escalated",
+      "iteration_count": 0,
+      "max_iterations": 3,
+      "session_id": "STU-026",
+      "student_id": {
+        "sha256": "2b680af4ff617fbc801f5d750bdae1adc19483ee62263b6b2c6b911c2ba705b7",
+        "type": "pseudonymous_identifier"
+      },
+      "context_snippets": [],
+      "plan_history": [],
+      "tool_observations": [],
+      "timestamp": "2026-11-03T16:52:48.276+00:00"
+    }
+  ]
+}
